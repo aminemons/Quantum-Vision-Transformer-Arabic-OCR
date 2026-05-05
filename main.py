@@ -1,5 +1,5 @@
 """
-Hybrid QCNN-ViT — Main Entry Point.
+Hybrid QCNN-ViT -- Main Entry Point.
 
 Orchestrates the full pipeline:
 1. Data loading and preprocessing
@@ -65,7 +65,7 @@ def main():
     )
     generate_all_visualizations(model=model, data_loader=test_loader)
 
-    print("\n🎉 Pipeline complete! Check results/ for outputs.")
+    print("\n[DONE] Pipeline complete! Check results/ for outputs.")
 
 
 if __name__ == "__main__":
