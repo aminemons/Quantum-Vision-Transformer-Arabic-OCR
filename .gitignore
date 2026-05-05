@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data (auto-downloaded)
+data/*.csv
+data/*.h5
+data/*.npz
+data/*.zip
+data/raw/
+
+# Model artifacts (large binaries)
+results/*.pt
+results/*.pth
+results/*.npy
+
+# Keep the results directory structure
+!results/.gitkeep
+
+# Logs
+*.log
