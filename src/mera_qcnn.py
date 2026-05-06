@@ -71,7 +71,7 @@ def mera_circuit(inputs, entangle_params_0, pool_params_0,
     for i, w in enumerate(next_wires):
         qml.RY(final_params[i], wires=w)
 
-    return [qml.expval(qml.PauliZ(w)) for w in next_wires]
+    return [qml.expval(qml.PauliZ(w)) for w in all_wires]
 
 
 def _build_weight_shapes(n_qubits=NUM_QUBITS):
@@ -89,7 +89,7 @@ def _build_weight_shapes(n_qubits=NUM_QUBITS):
 
 
 weight_shapes = _build_weight_shapes(NUM_QUBITS)
-quantum_out_dim = NUM_QUBITS // 4
+quantum_out_dim = NUM_QUBITS
 
 
 class FourierMERAQCNN(nn.Module):
