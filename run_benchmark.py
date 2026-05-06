@@ -46,6 +46,16 @@ def run(modes, epochs, img_size, batch_size, lr_cnn, lr_qcnn):
         train_loader, val_loader, test_loader, n_classes = build_loaders(
             mode=mode, img_size=img_size, batch_size=batch_size
         )
+        
+        # Subsample training data for speed (QML is best tested in few-shot anyway)
+        max_train_samples = 2000
+        if len(train_loader.dataset) > max_train_samples:
+            import torch.utils.data as data
+            indices = torch.randperm(len(train_loader.dataset))[:max_train_samples]
+            subset = data.Subset(train_loader.dataset, indices)
+            train_loader = data.DataLoader(subset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
+            print(f"  [!] Subsampled training data to {max_train_samples} for faster execution.")
+
         print(f"  classes={n_classes} | "
               f"train={len(train_loader.dataset)} | "
               f"val={len(val_loader.dataset)} | "
@@ -59,7 +69,8 @@ def run(modes, epochs, img_size, batch_size, lr_cnn, lr_qcnn):
         cnn, cnn_hist = train_model(
             cnn, train_loader, val_loader,
             save_path=cnn_path, epochs=epochs, lr=lr_cnn,
-            use_amp=True, model_name=f"ResNet_CNN_{mode}"
+            use_amp=True, model_name=f"ResNet_CNN_{mode}",
+            show_batch_progress=True
         )
 
         print(f"\n--- Training Fourier-MERA QCNN [{mode}] ---")
@@ -67,7 +78,8 @@ def run(modes, epochs, img_size, batch_size, lr_cnn, lr_qcnn):
         qcnn, qcnn_hist = train_model(
             qcnn, train_loader, val_loader,
             save_path=qcnn_path, epochs=epochs, lr=lr_qcnn,
-            use_amp=False, model_name=f"MERA_QCNN_{mode}"
+            use_amp=False, model_name=f"MERA_QCNN_{mode}",
+            show_batch_progress=True
         )
 
         print(f"\n--- PGD Adversarial Benchmark [{mode}] ---")

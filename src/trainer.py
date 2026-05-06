@@ -11,13 +11,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def train_one_epoch(model, loader, optimizer, criterion, scaler=None):
+def train_one_epoch(model, loader, optimizer, criterion, scaler=None, show_progress=False):
     model.train()
     total_loss = 0.0
     correct = 0
     total = 0
 
-    for imgs, labels in loader:
+    it = tqdm(loader, leave=False, desc="  batch") if show_progress else loader
+    for imgs, labels in it:
         imgs, labels = imgs.to(DEVICE), labels.to(DEVICE)
         optimizer.zero_grad()
 
@@ -60,7 +61,8 @@ def evaluate(model, loader):
 
 
 def train_model(model, train_loader, val_loader, save_path,
-                epochs=30, lr=1e-3, use_amp=True, model_name="model"):
+                epochs=30, lr=1e-3, use_amp=True, model_name="model",
+                show_batch_progress=False):
     model = model.to(DEVICE)
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"\n[train] {model_name} | {n_params:,} params | device={DEVICE}")
@@ -79,7 +81,10 @@ def train_model(model, train_loader, val_loader, save_path,
 
     for epoch in range(epochs):
         t0 = time.time()
-        tr_loss, tr_acc = train_one_epoch(model, train_loader, optimizer, criterion, scaler)
+        tr_loss, tr_acc = train_one_epoch(
+            model, train_loader, optimizer, criterion, scaler,
+            show_progress=show_batch_progress
+        )
         scheduler.step()
         val_acc = evaluate(model, val_loader)
         elapsed = time.time() - t0
