@@ -4,27 +4,31 @@ Full-Power Training Script for RTX A5000 Workstation.
 Usage: python train_workstation.py
 """
 
-import os, sys, json, time
+import os, sys, json, time, argparse
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import pennylane as qml
-from torch.utils.data import Dataset, DataLoader, Subset
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix
 import matplotlib; matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+from data_loader import load_data
 
 # ─── Config ───────────────────────────────────────────────
+parser = argparse.ArgumentParser(description="Train Hybrid QViT vs Classical CNN")
+parser.add_argument('--few-shot', type=float, default=1.0, help='Fraction of data to use (e.g., 0.05 for few-shot)')
+parser.add_argument('--noise', type=float, default=0.0, help='Amount of Gaussian noise to add (e.g., 0.2)')
+parser.add_argument('--use-tashkeel', action='store_true', help='Use synthetic Tashkeel (expands classes to 112)')
+args = parser.parse_args()
+
 IMG_SIZE    = 32
 BATCH_SIZE  = 256
 EPOCHS      = 30
 LR          = 0.002
-NUM_CLASSES = 28
 DEVICE      = "cuda" if torch.cuda.is_available() else "cpu"
 SAVE_DIR    = os.path.join(os.path.dirname(__file__), "results")
 os.makedirs(SAVE_DIR, exist_ok=True)
@@ -39,57 +43,14 @@ if DEVICE == "cuda":
     print(f"VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
 
 # ─── Dataset ──────────────────────────────────────────────
-import kagglehub, pandas as pd
-from skimage.transform import resize as sk_resize
-
-def find_csv(d, key):
-    return [os.path.join(d, f) for f in os.listdir(d)
-            if key in f.lower().replace(' ','') and f.endswith('.csv')][0]
-
-print("\n[1/5] Loading AHCD dataset...")
-path = kagglehub.dataset_download('mloey1/ahcd1')
-csv_dir = [r for r,_,fs in os.walk(path) if any('trainimages' in f.lower().replace(' ','') for f in fs)][0]
-
-t0 = time.time()
-train_img = pd.read_csv(find_csv(csv_dir,'trainimages'), header=None).values.astype(np.float32)
-train_lbl = pd.read_csv(find_csv(csv_dir,'trainlabel'),  header=None).values.flatten().astype(int) - 1
-test_img  = pd.read_csv(find_csv(csv_dir,'testimages'),  header=None).values.astype(np.float32)
-test_lbl  = pd.read_csv(find_csv(csv_dir,'testlabel'),   header=None).values.flatten().astype(int) - 1
-print(f"   Loaded {len(train_img)} train + {len(test_img)} test in {time.time()-t0:.1f}s")
-
-print(f"[2/5] Resizing to {IMG_SIZE}x{IMG_SIZE}...")
-t0 = time.time()
-def fast_resize_normalize(images, orig=32, target=IMG_SIZE):
-    n = len(images)
-    imgs = images.reshape(n, orig, orig)
-    out  = np.zeros((n, target, target), dtype=np.float32)
-    for i in range(n):
-        out[i] = sk_resize(imgs[i], (target, target), anti_aliasing=True, preserve_range=True)
-    out = out.reshape(n, -1)
-    lo = out.min(1, keepdims=True); hi = out.max(1, keepdims=True)
-    return (out - lo) / np.where(hi - lo > 1e-8, hi - lo, 1.0)
-
-train_img = fast_resize_normalize(train_img)
-test_img  = fast_resize_normalize(test_img)
-print(f"   Done in {time.time()-t0:.1f}s | shape: {train_img.shape}")
-
-class ArabicDS(Dataset):
-    def __init__(self, imgs, lbls):
-        self.X = torch.tensor(imgs, dtype=torch.float32)
-        self.y = torch.tensor(lbls, dtype=torch.long)
-    def __len__(self): return len(self.y)
-    def __getitem__(self, i): return self.X[i], self.y[i]
-
-tr_idx, val_idx = train_test_split(np.arange(len(train_img)), test_size=0.15,
-                                    stratify=train_lbl, random_state=42)
-full_ds = ArabicDS(train_img, train_lbl)
-train_loader = DataLoader(Subset(full_ds, tr_idx), batch_size=BATCH_SIZE,
-                          shuffle=True, num_workers=8, pin_memory=True)
-val_loader   = DataLoader(Subset(full_ds, val_idx), batch_size=BATCH_SIZE,
-                          num_workers=8, pin_memory=True)
-test_loader  = DataLoader(ArabicDS(test_img, test_lbl), batch_size=BATCH_SIZE,
-                          num_workers=8, pin_memory=True)
-print(f"   Loaders: {len(train_loader)} train / {len(val_loader)} val / {len(test_loader)} test")
+print(f"\n[1/5] Loading AHCD dataset via data_loader.py (Few-Shot: {args.few_shot}, Noise: {args.noise}, Tashkeel: {args.use_tashkeel})...")
+train_loader, val_loader, test_loader, ARABIC_CHARS = load_data(
+    batch_size=BATCH_SIZE, img_size=IMG_SIZE,
+    few_shot_ratio=args.few_shot, noise_level=args.noise,
+    use_tashkeel=args.use_tashkeel
+)
+NUM_CLASSES = len(ARABIC_CHARS)
+print(f"   Classes configured: {NUM_CLASSES}")
 
 # ─── Classical CNN ─────────────────────────────────────────
 class ClassicalCNN(nn.Module):
@@ -232,12 +193,12 @@ def eval_test(model, name):
 
 # ─── Run Training ──────────────────────────────────────────
 print("\n[3/5] Training Classical CNN...")
-cnn = ClassicalCNN(img_size=IMG_SIZE)
+cnn = ClassicalCNN(img_size=IMG_SIZE, n_classes=NUM_CLASSES)
 h_cnn = train_model(cnn, "Classical_CNN")
 acc_cnn = eval_test(cnn, "Classical_CNN")
 
 print("\n[4/5] Training Hybrid CNN-QViT...")
-qvit = HybridCNNQViT(img_size=IMG_SIZE)
+qvit = HybridCNNQViT(img_size=IMG_SIZE, n_classes=NUM_CLASSES)
 h_qvit = train_model(qvit, "Hybrid_QViT")
 acc_qvit = eval_test(qvit, "Hybrid_QViT")
 

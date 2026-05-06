@@ -44,7 +44,9 @@ ARABIC_UNICODE = [
     'Kaf', 'Lam', 'Meem', 'Noon', 'Heh', 'Waw', 'Yeh'
 ]
 
-NUM_CLASSES = 28
+TASHKEEL = ['None', 'Fatha', 'Kasra', 'Damma']
+
+NUM_CLASSES_BASE = 28
 IMG_SIZE = 8  # Quantum-ready: 8x8 = 64 pixels
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
 
@@ -104,9 +106,9 @@ def _generate_synthetic_ahcd(data_dir: str, n_train: int = 13440, n_test: int = 
     # Generate training data
     train_images = []
     train_labels = []
-    samples_per_class_train = n_train // NUM_CLASSES
+    samples_per_class_train = n_train // NUM_CLASSES_BASE
 
-    for cls in range(NUM_CLASSES):
+    for cls in range(NUM_CLASSES_BASE):
         pattern = _make_char_pattern(cls)
         for i in range(samples_per_class_train):
             noise = np.random.normal(0, 0.08, pattern.shape).astype(np.float32)
@@ -120,9 +122,9 @@ def _generate_synthetic_ahcd(data_dir: str, n_train: int = 13440, n_test: int = 
     # Generate test data
     test_images = []
     test_labels = []
-    samples_per_class_test = n_test // NUM_CLASSES
+    samples_per_class_test = n_test // NUM_CLASSES_BASE
 
-    for cls in range(NUM_CLASSES):
+    for cls in range(NUM_CLASSES_BASE):
         pattern = _make_char_pattern(cls)
         for i in range(samples_per_class_test):
             noise = np.random.normal(0, 0.1, pattern.shape).astype(np.float32)
@@ -213,19 +215,13 @@ class ArabicCharDataset(Dataset):
         self.img_size = img_size
         self.normalize_range = normalize_range
 
-        # Determine original image dimensions
-        n_pixels = images.shape[1]
-        orig_size = int(np.sqrt(n_pixels))
-
-        # Resize images to target size
-        self.images = self._resize_images(images, orig_size, img_size)
-
-        # Normalize to [0, pi] for angle embedding
-        self.images = self._normalize(self.images, normalize_range)
+        # Add Tashkeel processing if requested
+        self.images = images
+        self.labels = labels
 
         # Store as float32 tensors
         self.images = torch.tensor(self.images, dtype=torch.float32)
-        self.labels = torch.tensor(labels, dtype=torch.long)
+        self.labels = torch.tensor(self.labels, dtype=torch.long)
 
     def _resize_images(self, images: np.ndarray, orig_size: int,
                        target_size: int) -> np.ndarray:
@@ -286,9 +282,41 @@ def _find_file(data_dir: str, base_name: str) -> str:
                             f"Files found: {os.listdir(data_dir)}")
 
 
+def _apply_tashkeel(images, labels, orig_size):
+    """
+    Expands the dataset by a factor of 4, adding diacritics (Tashkeel).
+    Classes: 0=None, 1=Fatha, 2=Kasra, 3=Damma
+    New Label = (base_label * 4) + tashkeel_idx
+    """
+    n_samples = len(images)
+    new_images = []
+    new_labels = []
+    
+    for i in range(n_samples):
+        img = images[i].reshape(orig_size, orig_size).copy()
+        base_label = labels[i]
+        
+        for t_idx in range(4):
+            img_t = img.copy()
+            if t_idx == 1:  # Fatha (top stroke)
+                img_t[2:4, orig_size//2-3:orig_size//2+3] = 1.0
+            elif t_idx == 2:  # Kasra (bottom stroke)
+                img_t[orig_size-4:orig_size-2, orig_size//2-3:orig_size//2+3] = 1.0
+            elif t_idx == 3:  # Damma (top loop)
+                img_t[2:5, orig_size//2:orig_size//2+3] = 1.0
+                img_t[3, orig_size//2+1] = 0.0 # hollow center
+            
+            new_images.append(img_t.flatten())
+            new_labels.append(base_label * 4 + t_idx)
+            
+    return np.array(new_images), np.array(new_labels)
+
+
 def load_data(data_dir: str = None, max_samples: int = None,
               val_split: float = 0.15, batch_size: int = 32,
-              img_size: int = IMG_SIZE, seed: int = 42):
+              img_size: int = IMG_SIZE, seed: int = 42,
+              use_tashkeel: bool = False, noise_level: float = 0.0,
+              few_shot_ratio: float = 1.0):
     """
     Full data loading pipeline: download -> preprocess -> DataLoader.
 
@@ -299,6 +327,9 @@ def load_data(data_dir: str = None, max_samples: int = None,
         batch_size: DataLoader batch size
         img_size: target image resolution (default 8x8)
         seed: random seed for reproducibility
+        use_tashkeel: if True, expands classes to 112 (28 chars x 4 diacritics)
+        noise_level: amount of Gaussian noise to add (0.0 to 1.0)
+        few_shot_ratio: fraction of training data to keep (0.0 to 1.0)
 
     Returns:
         train_loader: DataLoader for training
@@ -319,10 +350,60 @@ def load_data(data_dir: str = None, max_samples: int = None,
     # Convert labels to 0-indexed
     train_labels = train_labels.astype(int) - 1
     test_labels = test_labels.astype(int) - 1
+    
+    orig_size = int(np.sqrt(train_images.shape[1]))
+    
+    if use_tashkeel:
+        print("[INFO] Adding Tashkeel (Diacritics)... Expanding to 112 classes.")
+        train_images, train_labels = _apply_tashkeel(train_images, train_labels, orig_size)
+        test_images, test_labels = _apply_tashkeel(test_images, test_labels, orig_size)
+        class_names = [f"{char}_{t}" for char in ARABIC_CHARS for t in TASHKEEL]
+    else:
+        class_names = ARABIC_CHARS
 
     print(f"[OK] Raw data loaded: {train_images.shape[0]} train / {test_images.shape[0]} test")
     print(f"    Image dimensions: {train_images.shape[1]} pixels -> {img_size}x{img_size}")
     print(f"    Classes: {len(np.unique(train_labels))} Arabic characters")
+    
+    # Resize and Normalize all images
+    def _process_images(imgs):
+        resized = []
+        for img_flat in imgs:
+            img = img_flat.reshape(orig_size, orig_size)
+            pil_img = Image.fromarray((img * 255).astype(np.uint8) if img.max() <= 1.0 else img.astype(np.uint8))
+            pil_img = pil_img.resize((img_size, img_size), Image.LANCZOS)
+            resized.append(np.array(pil_img, dtype=np.float32).flatten())
+        resized = np.array(resized)
+        
+        img_min = resized.min(axis=1, keepdims=True)
+        img_max = resized.max(axis=1, keepdims=True)
+        denom = np.where(img_max - img_min > 1e-8, img_max - img_min, 1.0)
+        return (resized - img_min) / denom * np.pi
+        
+    print("[INFO] Resizing and normalizing images...")
+    train_images = _process_images(train_images)
+    test_images = _process_images(test_images)
+    
+    # Add noise if requested
+    if noise_level > 0.0:
+        print(f"[INFO] Applying Gaussian noise (level={noise_level})...")
+        train_images += np.random.normal(0, noise_level, train_images.shape).astype(np.float32)
+        test_images += np.random.normal(0, noise_level, test_images.shape).astype(np.float32)
+        train_images = np.clip(train_images, 0, np.pi)
+        test_images = np.clip(test_images, 0, np.pi)
+        
+    # Apply few-shot sampling
+    if few_shot_ratio < 1.0:
+        print(f"[INFO] Applying few-shot sampling (ratio={few_shot_ratio})...")
+        n_keep = int(len(train_images) * few_shot_ratio)
+        indices, _ = train_test_split(
+            np.arange(len(train_images)),
+            train_size=n_keep,
+            stratify=train_labels,
+            random_state=seed
+        )
+        train_images = train_images[indices]
+        train_labels = train_labels[indices]
 
     # Step 3: Subsample if requested (for fast quantum simulation)
     if max_samples is not None and max_samples < len(train_images):
@@ -374,7 +455,7 @@ def load_data(data_dir: str = None, max_samples: int = None,
     print(f"    Validation batches: {len(val_loader)}")
     print(f"    Test batches: {len(test_loader)}")
 
-    return train_loader, val_loader, test_loader, ARABIC_CHARS
+    return train_loader, val_loader, test_loader, class_names
 
 
 # -----------------------------------------------
