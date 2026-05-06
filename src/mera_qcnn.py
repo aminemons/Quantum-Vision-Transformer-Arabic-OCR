@@ -5,31 +5,30 @@ import pennylane as qml
 
 
 NUM_QUBITS = 8
-DEVICE_NAME = "lightning.gpu"
 
 
 def _get_device():
     try:
-        dev = qml.device(DEVICE_NAME, wires=NUM_QUBITS)
-        print(f"[mera_qcnn] Using {DEVICE_NAME} backend")
+        dev = qml.device("lightning.qubit", wires=NUM_QUBITS)
+        print("[mera_qcnn] Using lightning.qubit backend (CPU, adjoint diff)")
         return dev
     except Exception:
-        print("[mera_qcnn] lightning.gpu unavailable, falling back to lightning.qubit")
-        return qml.device("lightning.qubit", wires=NUM_QUBITS)
+        print("[mera_qcnn] Falling back to default.qubit")
+        return qml.device("default.qubit", wires=NUM_QUBITS)
 
 
 dev = _get_device()
 
 
 def fourier_reuploading_encoding(x, wires):
-    n = len(wires)
     n_feat = x.shape[0]
+    n_wires = len(wires)
     for layer in range(2):
         for i, w in enumerate(wires):
-            feat_idx = (layer * n + i) % n_feat
-            qml.RX(x[feat_idx] * np.pi, wires=w)
-            qml.RY(x[(feat_idx + 1) % n_feat] * np.pi, wires=w)
-            qml.RZ(x[(feat_idx + 2) % n_feat] * np.pi, wires=w)
+            fi = (layer * n_wires + i) % n_feat
+            qml.RX(x[fi] * np.pi, wires=w)
+            qml.RY(x[(fi + 1) % n_feat] * np.pi, wires=w)
+            qml.RZ(x[(fi + 2) % n_feat] * np.pi, wires=w)
 
 
 def mera_entangling_block(params, wires):
@@ -72,22 +71,20 @@ def mera_circuit(inputs, entangle_params_0, pool_params_0,
     for i, w in enumerate(next_wires):
         qml.RY(final_params[i], wires=w)
 
-    return qml.math.stack([qml.expval(qml.PauliZ(w)) for w in next_wires])
+    return [qml.expval(qml.PauliZ(w)) for w in next_wires]
 
 
 def _build_weight_shapes(n_qubits=NUM_QUBITS):
-    n0 = n_qubits
-    p0 = n_qubits // 2
-    n1 = n_qubits // 2
-    p1 = n_qubits // 4
+    n0, p0 = n_qubits, n_qubits // 2
+    n1, p1 = n_qubits // 2, n_qubits // 4
     n2 = n_qubits // 4
     return {
         "entangle_params_0": (n0 + n0 // 2,),
-        "pool_params_0": (p0 * 2,),
+        "pool_params_0":     (p0 * 2,),
         "entangle_params_1": (n1 + n1 // 2,),
-        "pool_params_1": (p1 * 2,),
+        "pool_params_1":     (p1 * 2,),
         "entangle_params_2": (n2 + n2 // 2,),
-        "final_params": (n2,),
+        "final_params":      (n2,),
     }
 
 
@@ -99,18 +96,23 @@ class QuantumLayer(nn.Module):
     def __init__(self, qnode, weight_shapes_dict):
         super().__init__()
         for name, shape in weight_shapes_dict.items():
-            param = nn.Parameter(torch.randn(shape) * 0.1)
-            self.register_parameter(name, param)
+            self.register_parameter(name, nn.Parameter(torch.randn(shape) * 0.1))
         self.qnode = qnode
         self._weight_names = list(weight_shapes_dict.keys())
 
     def forward(self, x):
+        gpu_device = x.device
+        x_cpu = x.cpu()
         weights = {n: getattr(self, n) for n in self._weight_names}
+
         results = []
-        for i in range(x.shape[0]):
-            out = self.qnode(x[i], **weights)
+        for i in range(x_cpu.shape[0]):
+            out = self.qnode(x_cpu[i], **weights)
+            if isinstance(out, (list, tuple)):
+                out = torch.stack([o if isinstance(o, torch.Tensor) else torch.as_tensor(o) for o in out])
             results.append(out.unsqueeze(0))
-        return torch.cat(results, dim=0)
+
+        return torch.cat(results, dim=0).to(gpu_device)
 
 
 class FourierMERAQCNN(nn.Module):

@@ -12,24 +12,24 @@ from albumentations.pytorch import ToTensorV2
 OTHMANIC_TRANSFORM = A.Compose([
     A.ElasticTransform(alpha=80, sigma=8, p=0.8),
     A.GridDistortion(num_steps=5, distort_limit=0.3, p=0.7),
-    A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.15, rotate_limit=20, p=0.8),
-    A.CoarseDropout(max_holes=6, max_height=4, max_width=4, min_holes=2, p=0.6),
-    A.GaussNoise(var_limit=(5.0, 30.0), p=0.5),
+    A.Affine(translate_percent=0.1, scale=(0.85, 1.15), rotate=(-20, 20), p=0.8),
+    A.CoarseDropout(num_holes_range=(2, 6), hole_height_range=(2, 4), hole_width_range=(2, 4), p=0.6),
+    A.GaussNoise(std_range=(0.02, 0.1), p=0.5),
     A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.5),
 ])
 
 TASHKEEL_TRANSFORM = A.Compose([
     A.ElasticTransform(alpha=120, sigma=12, p=0.9),
     A.GridDistortion(num_steps=7, distort_limit=0.5, p=0.8),
-    A.CoarseDropout(max_holes=10, max_height=3, max_width=3, min_holes=4, p=0.8),
-    A.ShiftScaleRotate(shift_limit=0.15, scale_limit=0.2, rotate_limit=30, p=0.9),
-    A.GaussNoise(var_limit=(10.0, 50.0), p=0.7),
+    A.CoarseDropout(num_holes_range=(4, 10), hole_height_range=(2, 3), hole_width_range=(2, 3), p=0.8),
+    A.Affine(translate_percent=0.15, scale=(0.8, 1.2), rotate=(-30, 30), p=0.9),
+    A.GaussNoise(std_range=(0.04, 0.2), p=0.7),
     A.Blur(blur_limit=3, p=0.4),
 ])
 
 CLEAN_TRANSFORM = A.Compose([
-    A.ShiftScaleRotate(shift_limit=0.05, scale_limit=0.05, rotate_limit=10, p=0.5),
-    A.GaussNoise(var_limit=(2.0, 10.0), p=0.3),
+    A.Affine(translate_percent=0.05, scale=(0.95, 1.05), rotate=(-10, 10), p=0.5),
+    A.GaussNoise(std_range=(0.01, 0.04), p=0.3),
 ])
 
 
