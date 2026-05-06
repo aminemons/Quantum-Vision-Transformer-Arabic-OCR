@@ -36,10 +36,14 @@ data/*.npz
 data/*.zip
 data/raw/
 
-# Model artifacts (large binaries)
+# Model artifacts and output images (large binaries)
 results/*.pt
 results/*.pth
 results/*.npy
+results/*.png
+benchmark_results/*.png
+adversarial_results/*.pt
+adversarial_results/*.pth
 
 # Keep the results directory structure
 !results/.gitkeep
