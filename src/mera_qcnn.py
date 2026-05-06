@@ -5,7 +5,6 @@ import pennylane as qml
 
 
 NUM_QUBITS = 8
-NUM_LAYERS = 3
 DEVICE_NAME = "lightning.gpu"
 
 
@@ -24,12 +23,13 @@ dev = _get_device()
 
 def fourier_reuploading_encoding(x, wires):
     n = len(wires)
+    n_feat = x.shape[0]
     for layer in range(2):
         for i, w in enumerate(wires):
-            feat_idx = (layer * n + i) % len(x)
+            feat_idx = (layer * n + i) % n_feat
             qml.RX(x[feat_idx] * np.pi, wires=w)
-            qml.RY(x[(feat_idx + 1) % len(x)] * np.pi, wires=w)
-            qml.RZ(x[(feat_idx + 2) % len(x)] * np.pi, wires=w)
+            qml.RY(x[(feat_idx + 1) % n_feat] * np.pi, wires=w)
+            qml.RZ(x[(feat_idx + 2) % n_feat] * np.pi, wires=w)
 
 
 def mera_entangling_block(params, wires):
@@ -38,7 +38,6 @@ def mera_entangling_block(params, wires):
         qml.RY(params[i], wires=wires[i])
         qml.RY(params[i + 1], wires=wires[i + 1])
         qml.CRZ(params[n + i // 2], wires=[wires[i], wires[i + 1]])
-
     for i in range(1, n - 1, 2):
         qml.RY(params[i], wires=wires[i])
         qml.RY(params[i + 1], wires=wires[i + 1])
@@ -73,7 +72,7 @@ def mera_circuit(inputs, entangle_params_0, pool_params_0,
     for i, w in enumerate(next_wires):
         qml.RY(final_params[i], wires=w)
 
-    return [qml.expval(qml.PauliZ(w)) for w in next_wires]
+    return qml.math.stack([qml.expval(qml.PauliZ(w)) for w in next_wires])
 
 
 def _build_weight_shapes(n_qubits=NUM_QUBITS):
@@ -82,7 +81,6 @@ def _build_weight_shapes(n_qubits=NUM_QUBITS):
     n1 = n_qubits // 2
     p1 = n_qubits // 4
     n2 = n_qubits // 4
-
     return {
         "entangle_params_0": (n0 + n0 // 2,),
         "pool_params_0": (p0 * 2,),
@@ -97,12 +95,29 @@ weight_shapes = _build_weight_shapes(NUM_QUBITS)
 quantum_out_dim = NUM_QUBITS // 4
 
 
+class QuantumLayer(nn.Module):
+    def __init__(self, qnode, weight_shapes_dict):
+        super().__init__()
+        for name, shape in weight_shapes_dict.items():
+            param = nn.Parameter(torch.randn(shape) * 0.1)
+            self.register_parameter(name, param)
+        self.qnode = qnode
+        self._weight_names = list(weight_shapes_dict.keys())
+
+    def forward(self, x):
+        weights = {n: getattr(self, n) for n in self._weight_names}
+        results = []
+        for i in range(x.shape[0]):
+            out = self.qnode(x[i], **weights)
+            results.append(out.unsqueeze(0))
+        return torch.cat(results, dim=0)
+
+
 class FourierMERAQCNN(nn.Module):
     def __init__(self, img_size=16, n_classes=28, n_qubits=NUM_QUBITS):
         super().__init__()
         self.img_size = img_size
         self.n_qubits = n_qubits
-        self.input_dim = img_size * img_size
 
         self.classical_encoder = nn.Sequential(
             nn.Conv2d(1, 16, 3, padding=1, bias=False),
@@ -117,7 +132,7 @@ class FourierMERAQCNN(nn.Module):
             nn.Tanh(),
         )
 
-        self.qlayer = qml.qnn.TorchLayer(mera_circuit, weight_shapes)
+        self.qlayer = QuantumLayer(mera_circuit, weight_shapes)
 
         self.classifier = nn.Sequential(
             nn.Linear(quantum_out_dim, 128),

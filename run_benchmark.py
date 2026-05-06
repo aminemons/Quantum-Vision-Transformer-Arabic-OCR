@@ -113,7 +113,7 @@ if __name__ == "__main__":
                         help="Dataset modes to benchmark")
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--img-size", type=int, default=16)
-    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr-cnn", type=float, default=1e-3)
     parser.add_argument("--lr-qcnn", type=float, default=5e-4)
     args = parser.parse_args()
