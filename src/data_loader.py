@@ -419,10 +419,21 @@ def load_data(data_dir: str = None, max_samples: int = None,
         print(f"[INFO] Subsampled to {max_samples} training samples (stratified)")
 
     # Step 4: Train/validation split (stratified)
+    n_classes = len(np.unique(train_labels))
+    val_size = int(len(train_images) * val_split)
+    
+    if val_size < n_classes:
+        val_size = n_classes
+        
+    stratify_labels = train_labels
+    if len(train_images) - val_size < n_classes:
+        stratify_labels = None
+        val_size = val_split
+
     train_idx, val_idx = train_test_split(
         np.arange(len(train_images)),
-        test_size=val_split,
-        stratify=train_labels,
+        test_size=val_size,
+        stratify=stratify_labels,
         random_state=seed
     )
 
