@@ -21,14 +21,14 @@ dev = _get_device()
 
 
 def fourier_reuploading_encoding(x, wires):
-    n_feat = x.shape[0]
+    n_feat = x.shape[-1]
     n_wires = len(wires)
     for layer in range(2):
         for i, w in enumerate(wires):
             fi = (layer * n_wires + i) % n_feat
-            qml.RX(x[fi] * np.pi, wires=w)
-            qml.RY(x[(fi + 1) % n_feat] * np.pi, wires=w)
-            qml.RZ(x[(fi + 2) % n_feat] * np.pi, wires=w)
+            qml.RX(x[..., fi] * np.pi, wires=w)
+            qml.RY(x[..., (fi + 1) % n_feat] * np.pi, wires=w)
+            qml.RZ(x[..., (fi + 2) % n_feat] * np.pi, wires=w)
 
 
 def mera_entangling_block(params, wires):
@@ -92,29 +92,6 @@ weight_shapes = _build_weight_shapes(NUM_QUBITS)
 quantum_out_dim = NUM_QUBITS // 4
 
 
-class QuantumLayer(nn.Module):
-    def __init__(self, qnode, weight_shapes_dict):
-        super().__init__()
-        for name, shape in weight_shapes_dict.items():
-            self.register_parameter(name, nn.Parameter(torch.randn(shape) * 0.1))
-        self.qnode = qnode
-        self._weight_names = list(weight_shapes_dict.keys())
-
-    def forward(self, x):
-        gpu_device = x.device
-        x_cpu = x.cpu()
-        weights = {n: getattr(self, n) for n in self._weight_names}
-
-        results = []
-        for i in range(x_cpu.shape[0]):
-            out = self.qnode(x_cpu[i], **weights)
-            if isinstance(out, (list, tuple)):
-                out = torch.stack([o if isinstance(o, torch.Tensor) else torch.as_tensor(o) for o in out])
-            results.append(out.unsqueeze(0))
-
-        return torch.cat(results, dim=0).to(gpu_device)
-
-
 class FourierMERAQCNN(nn.Module):
     def __init__(self, img_size=16, n_classes=28, n_qubits=NUM_QUBITS):
         super().__init__()
@@ -134,7 +111,7 @@ class FourierMERAQCNN(nn.Module):
             nn.Tanh(),
         )
 
-        self.qlayer = QuantumLayer(mera_circuit, weight_shapes)
+        self.qlayer = qml.qnn.TorchLayer(mera_circuit, weight_shapes)
 
         self.classifier = nn.Sequential(
             nn.Linear(quantum_out_dim, 128),
