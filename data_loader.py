@@ -19,13 +19,11 @@ class HMBDDataset(Dataset):
         return self.x_data[idx], self.y_data[idx]
 
 class HMBDDataLoader:
-    def __init__(self, data_dir="./data/hmbd-v1", total_classes=115, stress_test_samples_per_class=250, pca_components=256, batch_size=16):
+    def __init__(self, data_dir="./data/hmbd-v1", total_classes=115, stress_test_samples_per_class=250, batch_size=16):
         self.data_dir = data_dir
         self.total_classes = total_classes
         self.stress_test_samples_per_class = stress_test_samples_per_class
-        self.pca_components = pca_components
         self.batch_size = batch_size
-        self.pca_model = PCA(n_components=self.pca_components)
         
         self.train_loader = None
         self.val_loader = None
@@ -37,7 +35,7 @@ class HMBDDataLoader:
         
         transform = transforms.Compose([
             transforms.Grayscale(num_output_channels=1),
-            transforms.Resize((32, 32)),
+            transforms.Resize((16, 16)),
             transforms.ToTensor()
         ])
         
@@ -110,20 +108,16 @@ class HMBDDataLoader:
         x_train_val = np.concatenate(x_train_val, axis=0)
         y_train_val = np.concatenate(y_train_val, axis=0)
         
-        print(f"Fitting PCA ({x_train_val.shape[1]} -> {self.pca_components})...")
-        self.pca_model.fit(x_train_val)
-        
-        x_train_val_pca = self.pca_model.transform(x_train_val)
-        x_stress_pca = self.pca_model.transform(x_stress)
+        print("Normalizing features via Amplitude Encoding (L2-norm = 1)...")
         
         # Amplitude Encoding Normalization (L2 norm = 1)
-        norms_train_val = np.linalg.norm(x_train_val_pca, axis=1, keepdims=True)
+        norms_train_val = np.linalg.norm(x_train_val, axis=1, keepdims=True)
         norms_train_val[norms_train_val == 0] = 1.0
-        x_train_val_normalized = x_train_val_pca / norms_train_val
+        x_train_val_normalized = x_train_val / norms_train_val
         
-        norms_stress = np.linalg.norm(x_stress_pca, axis=1, keepdims=True)
+        norms_stress = np.linalg.norm(x_stress, axis=1, keepdims=True)
         norms_stress[norms_stress == 0] = 1.0
-        x_stress_normalized = x_stress_pca / norms_stress
+        x_stress_normalized = x_stress / norms_stress
         
         x_train, x_val, y_train, y_val = train_test_split(
             x_train_val_normalized, 

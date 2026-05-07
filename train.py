@@ -9,7 +9,7 @@ from data_loader import HMBDDataLoader
 from models import ClassicalCNN, HybridQNN, MultiClassQCNN
 from eval import Evaluator
 
-def train_model(model, dataloader, epochs=10, lr=0.01, device='cpu'):
+def train_model(model, dataloader, epochs=10, lr=0.002, device='cpu'):
     model.to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -59,7 +59,7 @@ def run_benchmarks():
             num_params = evaluator.count_parameters(model)
             print(f"Parameters: {num_params}")
             
-            train_model(model, loader.train_loader, epochs=10, lr=0.01, device=device)
+            train_model(model, loader.train_loader, epochs=10, lr=0.002, device=device)
             
             eff_dim = evaluator.compute_effective_dimension(model, loader.train_loader, device)
             

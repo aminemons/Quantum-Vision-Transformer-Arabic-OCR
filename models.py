@@ -6,19 +6,19 @@ import pennylane as qml
 class ClassicalCNN(nn.Module):
     def __init__(self, num_classes=115):
         super(ClassicalCNN, self).__init__()
-        self.conv1 = nn.Conv2d(1, 8, kernel_size=2)
-        self.conv2 = nn.Conv2d(8, 5, kernel_size=2)
-        self.conv3 = nn.Conv2d(5, 3, kernel_size=2)
+        self.conv1 = nn.Conv2d(1, 12, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(12, 12, kernel_size=3, padding=1)
+        self.conv3 = nn.Conv2d(12, 8, kernel_size=3, padding=1)
         self.pool = nn.AvgPool2d(2)
         self.dropout = nn.Dropout(0.2)
-        self.fc = nn.Linear(3, num_classes)
-        self.tanh = nn.Tanh()
+        self.fc = nn.Linear(8, num_classes)
+        self.act = nn.GELU()
         
     def forward(self, x):
         x = x.view(-1, 1, 16, 16)
-        x = self.pool(self.tanh(self.conv1(x)))
-        x = self.pool(self.tanh(self.conv2(x)))
-        x = self.pool(self.tanh(self.conv3(x)))
+        x = self.pool(self.act(self.conv1(x)))
+        x = self.pool(self.act(self.conv2(x)))
+        x = self.pool(self.act(self.conv3(x)))
         x = torch.mean(x, dim=(2, 3))
         x = self.dropout(x)
         x = self.fc(x)
@@ -64,7 +64,7 @@ class HybridQNN(nn.Module):
         return x
 
 class MultiClassQCNN(nn.Module):
-    def __init__(self, num_classes=115, num_layers=6):
+    def __init__(self, num_classes=115, num_layers=25):
         super(MultiClassQCNN, self).__init__()
         self.num_classes = num_classes
         self.num_layers = num_layers
