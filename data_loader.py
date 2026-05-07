@@ -32,7 +32,8 @@ class HMBDDataLoader:
         self.stress_test_loader = None
 
     def load_raw_images(self):
-        print(f"Loading real HMBD-v1 dataset from {self.data_dir}...")
+        actual_dir = os.path.join(self.data_dir, "Dataset") if os.path.exists(os.path.join(self.data_dir, "Dataset")) else self.data_dir
+        print(f"Loading real HMBD-v1 dataset from {actual_dir}...")
         
         transform = transforms.Compose([
             transforms.Grayscale(num_output_channels=1),
@@ -40,10 +41,18 @@ class HMBDDataLoader:
             transforms.ToTensor()
         ])
         
-        dataset = datasets.ImageFolder(root=self.data_dir, transform=transform)
+        def is_valid(path):
+            try:
+                img = Image.open(path)
+                img.verify()
+                return True
+            except Exception:
+                return False
+        
+        dataset = datasets.ImageFolder(root=actual_dir, transform=transform, is_valid_file=is_valid)
         
         if len(dataset.classes) != self.total_classes:
-            print(f"Warning: Expected {self.total_classes} classes, but found {len(dataset.classes)} in {self.data_dir}")
+            print(f"Warning: Expected {self.total_classes} classes, but found {len(dataset.classes)} in {actual_dir}")
         
         # Load all into memory for PCA (54k images of 32x32 is ~55MB, easily fits in memory)
         dataloader = DataLoader(dataset, batch_size=1024, shuffle=False)
