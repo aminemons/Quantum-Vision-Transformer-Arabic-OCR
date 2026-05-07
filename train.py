@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.optim.lr_scheduler import CosineAnnealingLR
 import os
+from tqdm import tqdm
 
 from data_loader import HMBDDataLoader
 from models import ClassicalCNN, HybridQNN, MultiClassQCNN
@@ -17,7 +18,8 @@ def train_model(model, dataloader, epochs=10, lr=0.01, device='cpu'):
     model.train()
     for epoch in range(epochs):
         total_loss = 0.0
-        for x, y in dataloader:
+        pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{epochs}")
+        for x, y in pbar:
             x, y = x.to(device), y.to(device)
             
             optimizer.zero_grad()
@@ -27,6 +29,7 @@ def train_model(model, dataloader, epochs=10, lr=0.01, device='cpu'):
             optimizer.step()
             
             total_loss += loss.item() * x.size(0)
+            pbar.set_postfix({'loss': f"{loss.item():.4f}"})
             
         scheduler.step()
         avg_loss = total_loss / len(dataloader.dataset)

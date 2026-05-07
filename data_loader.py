@@ -34,8 +34,13 @@ class HMBDDataLoader:
         total_samples_per_class = self.train_val_samples_per_class + self.stress_test_samples_per_class
         total_samples = self.total_classes * total_samples_per_class
         
-        x_raw = np.random.rand(total_samples, 32 * 32).astype(np.float32)
+        x_raw = np.zeros((total_samples, 32 * 32), dtype=np.float32)
         y_raw = np.repeat(np.arange(self.total_classes), total_samples_per_class)
+        
+        base_patterns = np.random.rand(self.total_classes, 32 * 32).astype(np.float32)
+        for i in range(total_samples):
+            class_idx = y_raw[i]
+            x_raw[i] = base_patterns[class_idx] + np.random.randn(32 * 32).astype(np.float32) * 0.2
         
         indices = np.arange(total_samples)
         np.random.shuffle(indices)
