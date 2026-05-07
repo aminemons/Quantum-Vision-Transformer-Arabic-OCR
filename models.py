@@ -51,7 +51,7 @@ class TrainableQuanvolution(nn.Module):
         q_results = self.qlayer(x_patches)
         
         q_results = q_results.view(batch_size, 64, 4).transpose(1, 2)
-        out = q_results.view(batch_size, 4, 8, 8)
+        out = q_results.reshape(batch_size, 4, 8, 8)
         return out
 
 class HybridQNN(nn.Module):
@@ -62,7 +62,7 @@ class HybridQNN(nn.Module):
         
     def forward(self, x):
         x = self.qconv(x)
-        x = x.view(x.shape[0], -1)
+        x = x.reshape(x.shape[0], -1)
         x = self.fc(x)
         return x
 
