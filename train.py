@@ -44,7 +44,7 @@ def run_benchmarks():
     
     for c in class_counts:
         print(f"\n{'='*40}\nRunning Benchmark for {c} Classes\n{'='*40}")
-        loader = HMBDDataLoader(data_dir="./data", total_classes=c, batch_size=16)
+        loader = HMBDDataLoader(total_classes=c, batch_size=16)
         loader.prepare_data()
         
         models = {
