@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import pennylane as qml
-import numpy as np
 
 class ClassicalCNN(nn.Module):
     def __init__(self, num_classes=115):
@@ -24,36 +24,40 @@ class ClassicalCNN(nn.Module):
         x = self.fc(x)
         return x
 
-class RandomQuanvolution(nn.Module):
+class TrainableQuanvolution(nn.Module):
     def __init__(self):
-        super(RandomQuanvolution, self).__init__()
-        self.dev = qml.device("default.qubit", wires=4)
+        super(TrainableQuanvolution, self).__init__()
+        try:
+            self.dev = qml.device("lightning.gpu", wires=4)
+        except Exception:
+            self.dev = qml.device("lightning.qubit", wires=4)
+            
+        weight_shapes = {"weights": (1, 4, 3)}
         
         @qml.qnode(self.dev, interface="torch")
-        def circuit(inputs):
+        def circuit(inputs, weights):
             qml.AngleEmbedding(inputs, wires=range(4))
-            qml.RandomLayers(weights=torch.rand(1, 4), wires=range(4))
+            qml.StronglyEntanglingLayers(weights, wires=range(4))
             return [qml.expval(qml.PauliZ(i)) for i in range(4)]
             
-        self.qnode = circuit
+        self.qlayer = qml.qnn.TorchLayer(circuit, weight_shapes)
 
     def forward(self, x):
         batch_size = x.shape[0]
-        x = x.view(batch_size, 16, 16)
-        out = torch.zeros(batch_size, 4, 8, 8, device=x.device)
-        for b in range(batch_size):
-            for i in range(0, 16, 2):
-                for j in range(0, 16, 2):
-                    patch = x[b, i:i+2, j:j+2].flatten()
-                    q_results = self.qnode(patch)
-                    for c in range(4):
-                        out[b, c, i//2, j//2] = q_results[c]
+        x = x.view(batch_size, 1, 16, 16)
+        x_unfold = F.unfold(x, kernel_size=2, stride=2)
+        x_patches = x_unfold.transpose(1, 2).reshape(-1, 4)
+        
+        q_results = self.qlayer(x_patches)
+        
+        q_results = q_results.view(batch_size, 64, 4).transpose(1, 2)
+        out = q_results.view(batch_size, 4, 8, 8)
         return out
 
 class HybridQNN(nn.Module):
     def __init__(self, num_classes=115):
         super(HybridQNN, self).__init__()
-        self.qconv = RandomQuanvolution()
+        self.qconv = TrainableQuanvolution()
         self.fc = nn.Linear(4 * 8 * 8, num_classes)
         
     def forward(self, x):
@@ -67,7 +71,10 @@ class MultiClassQCNN(nn.Module):
         super(MultiClassQCNN, self).__init__()
         self.num_classes = num_classes
         self.num_layers = num_layers
-        self.dev = qml.device("lightning.qubit", wires=8)
+        try:
+            self.dev = qml.device("lightning.gpu", wires=8)
+        except Exception:
+            self.dev = qml.device("lightning.qubit", wires=8)
         
         weight_shapes = {
             "f1_weights": (num_layers, 8, 2),

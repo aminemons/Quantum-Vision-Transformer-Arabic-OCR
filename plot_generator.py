@@ -25,9 +25,9 @@ def generate_plots(csv_path="results_comparison.csv"):
     plt.close()
 
     plt.figure(figsize=(10, 6))
-    noisy_df = df[df["Condition"] == "Noisy"]
+    noisy_df = df[df["Condition"] == "PGD_Adversarial"]
     sns.lineplot(data=noisy_df, x="Classes", y="Accuracy", hue="Model", marker="s", linewidth=2.5)
-    plt.title("Robustness: Accuracy vs. Class Count (Noisy Stress Test)")
+    plt.title("Robustness: Accuracy vs. Class Count (PGD Adversarial Test)")
     plt.ylabel("Accuracy")
     plt.xlabel("Number of Classes")
     plt.xticks([28, 115])
