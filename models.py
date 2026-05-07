@@ -68,10 +68,7 @@ class MultiClassQCNN(nn.Module):
         super(MultiClassQCNN, self).__init__()
         self.num_classes = num_classes
         self.num_layers = num_layers
-        try:
-            self.dev = qml.device("lightning.gpu", wires=8)
-        except Exception:
-            self.dev = qml.device("lightning.qubit", wires=8)
+        self.dev = qml.device("default.qubit", wires=8)
         
         weight_shapes = {
             "f1_weights": (num_layers, 8, 2),
@@ -79,7 +76,7 @@ class MultiClassQCNN(nn.Module):
             "pool_weights": (2,)
         }
         
-        @qml.qnode(self.dev, interface="torch")
+        @qml.qnode(self.dev, interface="torch", diff_method="backprop")
         def circuit(inputs, f1_weights, f2_weights, pool_weights):
             qml.AmplitudeEmbedding(features=inputs, wires=range(8), normalize=True)
             
