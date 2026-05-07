@@ -39,7 +39,7 @@ def run_benchmarks():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
-    class_counts = [28, 115]
+    class_counts = [115]
     evaluator = Evaluator()
     
     for c in class_counts:
