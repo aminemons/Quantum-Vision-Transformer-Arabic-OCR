@@ -27,14 +27,11 @@ class ClassicalCNN(nn.Module):
 class TrainableQuanvolution(nn.Module):
     def __init__(self):
         super(TrainableQuanvolution, self).__init__()
-        try:
-            self.dev = qml.device("lightning.gpu", wires=4)
-        except Exception:
-            self.dev = qml.device("lightning.qubit", wires=4)
+        self.dev = qml.device("default.qubit", wires=4)
             
         weight_shapes = {"weights": (1, 4, 3)}
         
-        @qml.qnode(self.dev, interface="torch")
+        @qml.qnode(self.dev, interface="torch", diff_method="backprop")
         def circuit(inputs, weights):
             qml.AngleEmbedding(inputs, wires=range(4))
             qml.StronglyEntanglingLayers(weights, wires=range(4))
