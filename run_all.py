@@ -296,6 +296,14 @@ def run_killer_experiments():
     print(f"  [RESULT] Hybrid QCNN 10% Acc: {qcnn_10_acc*100:.2f}%")
 
     # ---------------------------------------------------------
+    # SAVE MODELS FOR ASSET GENERATION
+    # ---------------------------------------------------------
+    print("\n💾 Saving models for paper asset generation...")
+    torch.save(classical_net.state_dict(), "classical_resnet.pth")
+    torch.save(hybrid_qcnn.state_dict(), "hybrid_qcnn.pth")
+    print("✅ Models saved: 'classical_resnet.pth' and 'hybrid_qcnn.pth'")
+
+    # ---------------------------------------------------------
     # GENERATE PUBLICATION PLOTS
     # ---------------------------------------------------------
     print("\n" + "="*50 + "\n GENERATING KILLER VISUALIZATIONS \n" + "="*50)
