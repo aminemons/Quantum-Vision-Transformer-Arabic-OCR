@@ -81,31 +81,28 @@ class FairCNN(nn.Module):
 #      Conv(1→4, 3×3):   40 params    16×16 → 8×8
 #      Conv(4→4, 3×3):  148 params     8×8 → 4×4
 #      AdaptiveAvgPool → Flatten → 4 features
-#      FC(4→128):       640 params
+#      FC(4→21):        105 params
 #      ─────────────────────────────
-#      Total extractor: 828 params  ≈  QCNN circuit: 762 params
+#      Total extractor: 293 params  ≈  QCNN circuit: 242 params
 #
 #    Readout (IDENTICAL to MultiClassQCNN):
-#      Linear(128 → num_classes):  128×115 + 115 = 14 950 params
+#      Linear(21 → num_classes):  21×115 + 115 = 2 530 params
 #
-#    Grand total:  ~15 778 params  ≈  QCNN total: ~15 712 params
-#
-#    Claim: at this budget, the QCNN circuit extracts BETTER adversarially-
-#    robust features because unitary quantum gates cannot amplify perturbations.
+#    Grand total:  ~2 823 params  ≈  QCNN total: ~2 772 params
 # ─────────────────────────────────────────────────────────────────────────────
 class IsoCNN(nn.Module):
     """Classical CNN iso-parametric to the QCNN circuit. Shared readout head."""
     def __init__(self, num_classes=115):
         super().__init__()
-        # Classical feature extractor → 128-dim feature vector  (~828 params)
+        # Classical feature extractor → 21-dim vector (matches QCNN 21 expvals)
         self.features = nn.Sequential(
             nn.Conv2d(1, 4, kernel_size=3, padding=1), nn.GELU(), nn.MaxPool2d(2),
             nn.Conv2d(4, 4, kernel_size=3, padding=1), nn.GELU(), nn.MaxPool2d(2),
             nn.AdaptiveAvgPool2d(1), nn.Flatten(),   # → 4 features
-            nn.Linear(4, 128), nn.GELU(),            # → 128 features
+            nn.Linear(4, 21), nn.Tanh(),             # → 21 features in [-1,1]
         )
-        # Readout: IDENTICAL architecture to MultiClassQCNN  (14 950 params)
-        self.readout = nn.Linear(128, num_classes)
+        # Readout: IDENTICAL architecture to MultiClassQCNN
+        self.readout = nn.Linear(21, num_classes)
 
     def forward(self, x):
         return self.readout(self.features(x.view(-1, 1, 16, 16)))
@@ -154,28 +151,26 @@ class HybridQNN(nn.Module):
 # ─────────────────────────────────────────────────────────────────────────────
 # D. MultiClassQCNN  (Pure Quantum – GPU-accelerated, barren-plateau-safe)
 #
-#    Key fixes vs naive implementation:
-#      1. Device priority: lightning.gpu (A5000 GPU) > lightning.qubit (C++ CPU)
-#         > default.qubit (NumPy fallback).  GPU gives ~20× speedup.
-#      2. diff_method="adjoint" for lightning devices — far faster than backprop
-#         because it avoids storing intermediate states.
-#      3. Only 3 layers (not 5): deeper circuits cause exponential gradient
-#         vanishing (barren plateau). ln(115)=4.74 loss = model predicts uniform.
-#      4. F2 uses CNOT + Euler-angle rotations instead of ArbitraryUnitary —
-#         adjoint-compatible AND avoids the barren plateau more effectively.
-#      5. Near-zero weight init for F1/F2 — starts close to identity, clean
-#         gradient signal from the first step.
+#    Key design choices:
+#      1. Device: lightning.gpu (A5000) with adjoint diff → ~20× speedup
+#      2. Measurements: qml.expval() NOT qml.probs().
+#         - adjoint diff only supports expval/var, NOT probs
+#         - Z+X+Y on 7 qubits = 21 expectation values
+#         - this is standard in QCNN literature (Cong et al. 2019)
+#      3. Only 3 layers: avoids barren plateau (loss=ln(115)=4.74 = uniform)
+#      4. F2: CNOT + Euler rotations (adjoint-safe, no ArbitraryUnitary)
+#      5. Near-zero weight init: starts near identity for clean gradients
 #
 #    Parameter count (num_layers=3, 8 qubits):
 #      F1 : 3 × 32   =   96 params
 #      F2 : 3 × 8×6  =  144 params
 #      Pool:          =    2 params
 #      Total quantum  =  242 params
-#      Readout Linear =  14 950 params
-#      Grand total    = ~15 192 params
+#      Readout Linear = 21×115+115 = 2 530 params
+#      Grand total    = ~2 772 params
 # ─────────────────────────────────────────────────────────────────────────────
 def _get_qdevice(wires):
-    """Pick the fastest available PennyLane device."""
+    """Pick the fastest available PennyLane device for adjoint+expval."""
     for name in ["lightning.gpu", "lightning.qubit", "default.qubit"]:
         try:
             dev = qml.device(name, wires=wires)
@@ -218,8 +213,6 @@ class MultiClassQCNN(nn.Module):
                     qml.RX(f1_weights[layer, 3*N + i], wires=i)
 
                 # ── F2: Euler-angle two-qubit convolution (adjoint-safe) ─────
-                # 6-param Euler decomposition: RZ·RY·RZ on each qubit + 2 CNOTs
-                # This is a universal 2-qubit gate up to global phase.
                 for i in range(N):
                     j = (i + 1) % N
                     qml.RZ(f2_weights[layer, i, 0], wires=i)
@@ -234,7 +227,14 @@ class MultiClassQCNN(nn.Module):
             # ── Pooling (paper Fig. 3) ────────────────────────────────────────
             qml.CRZ(pool_weights[0], wires=[0, 1])
             qml.CRX(pool_weights[1], wires=[0, 1])
-            return qml.probs(wires=range(1, N))   # 2^7 = 128 outputs
+
+            # ── Measurement: expval on 7 qubits × 3 Pauli bases = 21 outputs ─
+            # adjoint-compatible (unlike qml.probs which crashes on lightning)
+            return (
+                [qml.expval(qml.PauliZ(i)) for i in range(1, N)] +
+                [qml.expval(qml.PauliX(i)) for i in range(1, N)] +
+                [qml.expval(qml.PauliY(i)) for i in range(1, N)]
+            )
 
         self.qlayer = qml.qnn.TorchLayer(circuit, weight_shapes)
 
@@ -243,7 +243,8 @@ class MultiClassQCNN(nn.Module):
             for name, p in self.qlayer.named_parameters():
                 nn.init.normal_(p, mean=0.0, std=0.01)
 
-        self.readout = nn.Linear(128, num_classes)
+        # Readout: IDENTICAL architecture to IsoCNN — Linear(21, num_classes)
+        self.readout = nn.Linear(21, num_classes)
 
     def forward(self, x):
         return self.readout(self.qlayer(x))

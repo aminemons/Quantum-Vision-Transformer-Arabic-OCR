@@ -5,14 +5,14 @@ This is the most rigorous experiment in the repository.
 
 DESIGN
 ------
-Both models have IDENTICAL total parameter counts (~15 700 params)
-and IDENTICAL readout heads (Linear(128, num_classes)).
+Both models have IDENTICAL total parameter counts (~2 800 params)
+and IDENTICAL readout heads (Linear(21, num_classes)).
 
 The ONLY difference:
-  IsoCNN        → classical CNN feature extractor (~828 params)
-                  extracts 128 features from 256-dim PIXEL SPACE
-  MultiClassQCNN → quantum circuit feature extractor (~762 params)
-                  extracts 128 probability features from 2^8-dim HILBERT SPACE
+  IsoCNN        → classical CNN feature extractor (~293 params)
+                  extracts 21 features from 256-dim PIXEL SPACE
+  MultiClassQCNN → quantum circuit feature extractor (~242 params)
+                  extracts 21 expectation values from 2^8-dim HILBERT SPACE
 
 HYPOTHESIS
 ----------
@@ -101,15 +101,15 @@ def run():
             "train":   loader.train_loader,
             "val":     loader.val_loader,
             "stress":  loader.stress_test_loader,
-            "note":    "~828 classical conv params → 128 features (pixel space)",
+            "note":    "~293 classical conv params → 21 features (pixel space)",
         },
         {
             "name":    "QCNN (Quantum Feature Extractor)",
-            "model":   MultiClassQCNN(NUM_CLASSES, num_layers=5),
+            "model":   MultiClassQCNN(NUM_CLASSES, num_layers=3),
             "train":   loader.train_loader_qcnn,
             "val":     loader.val_loader_qcnn,
             "stress":  loader.stress_test_loader_qcnn,
-            "note":    "~762 quantum circuit params → 128 features (Hilbert space)",
+            "note":    "~242 quantum circuit params → 21 expvals (Hilbert space)",
         },
     ]
 
@@ -235,7 +235,7 @@ def generate_plot(results=None):
     text = (
         f"VERDICT\n\n"
         f"Both models have\n≈ {param_vals[0]:,} total parameters\n"
-        f"and identical readout\nFC(128 → {NUM_CLASSES}).\n\n"
+        f"and identical readout\nFC(21 → {NUM_CLASSES}).\n\n"
         f"IsoCNN retention:\n  {iso_r*100:.1f}%\n\n"
         f"QCNN retention:\n  {qcnn_r*100:.1f}%\n\n"
         f"Quantum advantage:\n  {delta:+.1f} pp\n\n"
