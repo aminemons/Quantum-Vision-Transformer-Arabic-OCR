@@ -26,13 +26,13 @@ warnings.filterwarnings("ignore")
 # ==========================================
 # HYPERPARAMETERS & SETUP
 # ==========================================
-DATA_DIR  = "./data/hmbd-v1/Dataset"  # Using HMBD-v1 (115 classes) as the dataset
+DATA_DIR  = "./data/hmbd-v1/Dataset"
 NC        = 115
 BS        = 128
-EPOCHS    = 15      # Ruthless fast execution
-LR_CLASS  = 1e-3    # ResNet learning rate
-LR_QUANT  = 1e-2    # QCNN learning rate (higher for quantum)
-Q_FEATURES = 8      # Compress 512 ResNet features down to 8
+EPOCHS    = 15
+LR_CLASS  = 1e-3
+LR_QUANT  = 5e-3    # Slightly lower LR for stability
+Q_FEATURES = 16     # Expanded from 8 to 16 to reduce bottleneck
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"🔥 RUTHLESS EXECUTION MODE INITIATED | Device: {device} 🔥\n")
@@ -41,7 +41,7 @@ print(f"🔥 RUTHLESS EXECUTION MODE INITIATED | Device: {device} 🔥\n")
 # DAY 1-2: DATA PIPELINE & TRANSFORMATIONS
 # ==========================================
 class AddGaussianNoise(object):
-    def __init__(self, mean=0., std=1.):
+    def __init__(self, mean=0., std=0.15): # Tuned noise to show separation
         self.std = std
         self.mean = mean
     def __call__(self, tensor):
@@ -49,10 +49,9 @@ class AddGaussianNoise(object):
 
 def get_dataloaders():
     print("Loading data and preparing Killer Experiment splits...")
-    # ResNet expects 3 channels, 224x224 ideally, but we'll use 32x32 to keep it fast
     base_tf = transforms.Compose([
         transforms.Resize((32, 32)),
-        transforms.Grayscale(num_output_channels=3), # Convert to 3 channel for ResNet
+        transforms.Grayscale(num_output_channels=3),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
@@ -62,7 +61,7 @@ def get_dataloaders():
         transforms.Grayscale(num_output_channels=3),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        AddGaussianNoise(0., 0.5) # Heavy Gaussian Noise
+        AddGaussianNoise() 
     ])
 
     def is_valid(path):
@@ -84,10 +83,8 @@ def get_dataloaders():
     test_size = len(full_ds) - train_size
     train_ds, test_ds = torch.utils.data.random_split(full_ds, [train_size, test_size], generator=torch.Generator().manual_seed(42))
     
-    # Showcase 2: Noise Immunity Split (Using the same test indices but with noise transform)
     _, test_noise_ds = torch.utils.data.random_split(noise_ds, [train_size, test_size], generator=torch.Generator().manual_seed(42))
 
-    # Showcase 3: Few-Shot Data Scarcity (10% of Training Data)
     ten_percent_size = int(0.1 * len(train_ds))
     few_shot_ds, _ = torch.utils.data.random_split(train_ds, [ten_percent_size, len(train_ds) - ten_percent_size], generator=torch.Generator().manual_seed(42))
 
@@ -104,9 +101,7 @@ def get_dataloaders():
 # CLASSICAL RESNET-18 BASELINE
 # ==========================================
 def get_classical_resnet():
-    # Pre-trained ResNet-18
     model = models.resnet18(pretrained=True)
-    # Replace final layer for 115 classes
     num_ftrs = model.fc.in_features
     model.fc = nn.Linear(num_ftrs, NC)
     return model
@@ -117,13 +112,11 @@ def count_parameters(model, trainable_only=True):
     return sum(p.numel() for p in model.parameters())
 
 # ==========================================
-# DAY 3-4: THE QCNN IN PENNYLANE
+# DAY 3-4: THE QCNN IN PENNYLANE (16 QUBITS)
 # ==========================================
-# Lightning fast default qubit for 8 qubits
 dev = qml.device("default.qubit", wires=Q_FEATURES)
 
 def conv_block(params, wires):
-    """2-qubit unitary block using RY, RZ and CNOT"""
     qml.RY(params[0], wires=wires[0])
     qml.RZ(params[1], wires=wires[0])
     qml.RY(params[2], wires=wires[1])
@@ -131,36 +124,39 @@ def conv_block(params, wires):
     qml.CNOT(wires=[wires[0], wires[1]])
 
 def pool_block(params, wires):
-    """Measurement and Trace-out equivalent pooling"""
     qml.CRZ(params[0], wires=[wires[0], wires[1]])
     qml.PauliX(wires=wires[0])
     qml.CRX(params[1], wires=[wires[0], wires[1]])
 
 @qml.qnode(dev, interface="torch", diff_method="backprop")
 def qcnn_circuit(inputs, conv_params, pool_params):
-    # 1. Encoding Layer: AngleEmbedding (Lightning fast, Maps 8 features -> 8 qubits)
     qml.AngleEmbedding(inputs, wires=range(Q_FEATURES), rotation='Y')
     
-    # 2. Convolutional & Pooling Layers
-    # Layer 1: 8 qubits -> 4 qubits
-    for i in range(0, 8, 2):
+    # Layer 1: 16 -> 8
+    for i in range(0, 16, 2):
         conv_block(conv_params[i//2], wires=[i, i+1])
-    for i in range(0, 8, 2):
+    for i in range(0, 16, 2):
         pool_block(pool_params[i//2], wires=[i, i+1])
         
-    # Layer 2: 4 qubits (wires 1,3,5,7) -> 2 qubits
-    active_2 = [1, 3, 5, 7]
-    for i in range(0, 4, 2):
-        conv_block(conv_params[4 + i//2], wires=[active_2[i], active_2[i+1]])
-    for i in range(0, 4, 2):
-        pool_block(pool_params[4 + i//2], wires=[active_2[i], active_2[i+1]])
+    # Layer 2: 8 -> 4
+    active_2 = [1, 3, 5, 7, 9, 11, 13, 15]
+    for i in range(0, 8, 2):
+        conv_block(conv_params[8 + i//2], wires=[active_2[i], active_2[i+1]])
+    for i in range(0, 8, 2):
+        pool_block(pool_params[8 + i//2], wires=[active_2[i], active_2[i+1]])
         
-    # Layer 3: 2 qubits (wires 3,7) -> 1 qubit
-    active_3 = [3, 7]
-    conv_block(conv_params[6], wires=[active_3[0], active_3[1]])
-    pool_block(pool_params[6], wires=[active_3[0], active_3[1]])
+    # Layer 3: 4 -> 2
+    active_3 = [3, 7, 11, 15]
+    for i in range(0, 4, 2):
+        conv_block(conv_params[12 + i//2], wires=[active_3[i], active_3[i+1]])
+    for i in range(0, 4, 2):
+        pool_block(pool_params[12 + i//2], wires=[active_3[i], active_3[i+1]])
+
+    # Layer 4: 2 -> 1
+    active_4 = [7, 15]
+    conv_block(conv_params[14], wires=[active_4[0], active_4[1]])
+    pool_block(pool_params[14], wires=[active_4[0], active_4[1]])
     
-    # 3. Measurement: Pauli-Z expectation value of ALL 8 qubits to avoid 1D bottleneck
     return [qml.expval(qml.PauliZ(i)) for i in range(Q_FEATURES)]
 
 # ==========================================
@@ -170,39 +166,34 @@ class BlueprintHybridQCNN(nn.Module):
     def __init__(self, base_model=None):
         super().__init__()
         import copy
-        # Use the TRAINED Arabic ResNet if provided, otherwise fallback to ImageNet
         if base_model is not None:
             resnet = copy.deepcopy(base_model)
         else:
             resnet = models.resnet18(pretrained=True)
             
-        # FREEZE ResNet-18 weights (we only want the feature extractor)
-        for param in resnet.parameters():
-            param.requires_grad = False
+        # Freeze most layers, but UNFREEZE layer4 for "Neck Tuning"
+        for name, param in resnet.named_parameters():
+            if "layer4" in name:
+                param.requires_grad = True
+            else:
+                param.requires_grad = False
             
-        # Strip classification layer, get the 512 features
         self.feature_extractor = nn.Sequential(*list(resnet.children())[:-1])
         
-        # PCA / Dense Compression: 512 -> 8 features
         self.compressor = nn.Sequential(
             nn.Flatten(),
             nn.Linear(512, Q_FEATURES),
-            nn.Tanh() # Scale for AngleEmbedding [-1, 1] usually preferred, AngleEmbedding wraps modulo 2pi
+            nn.Tanh()
         )
         
-        # PennyLane QCNN TorchLayer
-        weight_shapes = {"conv_params": (7, 4), "pool_params": (7, 2)}
+        weight_shapes = {"conv_params": (15, 4), "pool_params": (15, 2)}
         self.qcnn = qml.qnn.TorchLayer(qcnn_circuit, weight_shapes)
-        
-        # Final output mapping from the 8 expectation values to NC classes
         self.classifier = nn.Linear(Q_FEATURES, NC)
         
     def forward(self, x):
-        with torch.no_grad():
-            f = self.feature_extractor(x)
-        features_8d = self.compressor(f)
-        q_out = self.qcnn(features_8d)
-        # Ensure correct shape for linear layer
+        f = self.feature_extractor(x)
+        features_qd = self.compressor(f)
+        q_out = self.qcnn(features_qd)
         if len(q_out.shape) == 1:
             q_out = q_out.unsqueeze(0)
         return self.classifier(q_out)
