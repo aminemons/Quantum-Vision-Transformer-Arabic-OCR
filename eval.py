@@ -109,7 +109,7 @@ class Evaluator:
             "Accuracy": accuracy,
             "CrossEntropyLoss": loss,
             "EffectiveDimension": eff_dim,
-            "Parameters": num_params,
+            "NumParams": num_params,
             "AccuracyPer1000Params": acc_per_1000
         })
 

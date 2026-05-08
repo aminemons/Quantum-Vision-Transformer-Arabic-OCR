@@ -19,7 +19,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
 
 from data_loader import HMBDDataLoader
-from models import ClassicalCNN, FairCNN, HybridQNN, MultiClassQCNN, count_params
+from models import ClassicalCNN, FairCNN, IsoCNN, HybridQNN, MultiClassQCNN, count_params
 from eval import Evaluator
 
 # ── Unified training hyperparameters (SAME FOR ALL MODELS) ──────────────────
@@ -33,12 +33,13 @@ NUM_CLASSES   = 115
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def train_model(model, dataloader, device):
+def train_model(model, dataloader, device, lr=None):
     """Single unified training function. Identical for every model."""
+    lr = lr or LR
     model.to(device)
     criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTH)
-    optimizer = optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-    scheduler = CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=LR * 0.01)
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=WEIGHT_DECAY)
+    scheduler = CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=lr * 0.01)
 
     model.train()
     for epoch in range(EPOCHS):
@@ -92,6 +93,14 @@ def run_benchmarks():
             "note": "Classical model with same parameter budget as QCNN. Honest comparison."
         },
         {
+            "name": "IsoCNN (Iso-Parameter to QCNN)",
+            "model": IsoCNN(NUM_CLASSES),
+            "train_loader": loader.train_loader,
+            "val_loader":   loader.val_loader,
+            "stress_loader":loader.stress_test_loader,
+            "note": "Same total params as QCNN, same readout. Definitive comparison."
+        },
+        {
             "name": "HybridQNN",
             "model": HybridQNN(NUM_CLASSES),
             "train_loader": loader.train_loader,
@@ -105,7 +114,8 @@ def run_benchmarks():
             "train_loader": loader.train_loader_qcnn,
             "val_loader":   loader.val_loader_qcnn,
             "stress_loader":loader.stress_test_loader_qcnn,
-            "note": "Full amplitude embedding. Hypothesis: highest robustness retention ratio."
+            "lr":           0.01,
+            "note": "Full amplitude embedding, LR=0.01 (paper). Hypothesis: highest retention."
         },
     ]
 
@@ -128,7 +138,7 @@ def run_benchmarks():
         print(f"  Params: {n_params:,}")
         print(f"{'='*60}")
 
-        train_model(model, b["train_loader"], device)
+        train_model(model, b["train_loader"], device, lr=b.get("lr"))
 
         eff_dim = evaluator.compute_effective_dimension(model, b["train_loader"], device)
 
