@@ -1,109 +1,156 @@
+"""
+Fair Quantum Advantage Benchmark
+=================================
+Scientific Claim: Under IDENTICAL training conditions, quantum circuits exhibit
+superior adversarial robustness due to their inherent unitary structure (bounded
+Lipschitz constant), even when classical models are fully optimized.
+
+Experiment Design:
+  - ALL models: same optimizer (AdamW), same LR schedule, same epochs, same data
+  - Key metric: Robustness Retention Ratio = PGD_acc / Clean_acc
+  - FairCNN is parameter-matched to QCNN for the honest comparison
+  - ClassicalCNN (large) shows the absolute ceiling of classical approach
+"""
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.optim.lr_scheduler import CosineAnnealingLR
-import os
 from tqdm import tqdm
 
 from data_loader import HMBDDataLoader
-from models import ClassicalCNN, HybridQNN, MultiClassQCNN
+from models import ClassicalCNN, FairCNN, HybridQNN, MultiClassQCNN, count_params
 from eval import Evaluator
 
-def train_model(model, dataloader, epochs=30, lr=0.001, device='cpu'):
+# ── Unified training hyperparameters (SAME FOR ALL MODELS) ──────────────────
+EPOCHS        = 30
+LR            = 0.001
+BATCH_SIZE    = 128
+WEIGHT_DECAY  = 1e-4
+LABEL_SMOOTH  = 0.1
+GRAD_CLIP     = 1.0
+NUM_CLASSES   = 115
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def train_model(model, dataloader, device):
+    """Single unified training function. Identical for every model."""
     model.to(device)
-    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=lr * 0.01)
+    criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTH)
+    optimizer = optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+    scheduler = CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=LR * 0.01)
 
     model.train()
-    for epoch in range(epochs):
+    for epoch in range(EPOCHS):
         total_loss = 0.0
-        pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{epochs}")
+        pbar = tqdm(dataloader, desc=f"  Epoch {epoch+1}/{EPOCHS}")
         for x, y in pbar:
             x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
-
             optimizer.zero_grad(set_to_none=True)
-            outputs = model(x)
-            loss = criterion(outputs, y)
+            loss = criterion(model(x), y)
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
             optimizer.step()
-
             total_loss += loss.item() * x.size(0)
-            pbar.set_postfix({'loss': f"{loss.item():.4f}"})
-
+            pbar.set_postfix(loss=f"{loss.item():.4f}")
         scheduler.step()
-        avg_loss = total_loss / len(dataloader.dataset)
-        print(f"Epoch {epoch+1}/{epochs} - Loss: {avg_loss:.4f}")
+        avg = total_loss / len(dataloader.dataset)
+        print(f"  Epoch {epoch+1}/{EPOCHS} - Loss: {avg:.4f}")
+
 
 def run_benchmarks():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+    print(f"\n{'='*60}")
+    print(f"  Fair Quantum Advantage Benchmark — {NUM_CLASSES} Classes")
+    print(f"  ALL models: AdamW lr={LR}, {EPOCHS} epochs, batch={BATCH_SIZE}")
+    print(f"{'='*60}")
 
-    num_classes = 115
-    print(f"\n{'='*40}\nRunning Benchmark for {num_classes} Classes\n{'='*40}")
-
-    loader = HMBDDataLoader(total_classes=num_classes, batch_size=128)
+    # ── Prepare data (two sets: pixel-space + L2-normalized for QCNN) ────────
+    loader = HMBDDataLoader(total_classes=NUM_CLASSES, batch_size=BATCH_SIZE)
     loader.prepare_data()
-
     evaluator = Evaluator()
 
-    # ----------------------------------------------------------------
-    # Model A: ClassicalCNN -- uses raw [0,1] pixel loaders
-    # ----------------------------------------------------------------
-    name = "ClassicalCNN"
-    model = ClassicalCNN(num_classes=num_classes)
-    print(f"\nTraining {name}...")
-    print(f"Parameters: {evaluator.count_parameters(model)}")
-    train_model(model, loader.train_loader, epochs=30, lr=0.001, device=device)
+    # ── Define the 4 models and which data loader each uses ──────────────────
+    # The QCNN uses L2-normalized loaders (AmplitudeEmbedding requires unit norm)
+    # All others use raw [0,1] pixel loaders
+    benchmarks = [
+        {
+            "name": "ClassicalCNN (Unconstrained)",
+            "model": ClassicalCNN(NUM_CLASSES),
+            "train_loader": loader.train_loader,
+            "val_loader":   loader.val_loader,
+            "stress_loader":loader.stress_test_loader,
+            "note": "Best-possible classical model. Shows clean-accuracy ceiling."
+        },
+        {
+            "name": "FairCNN (Parameter-Matched to QCNN)",
+            "model": FairCNN(NUM_CLASSES),
+            "train_loader": loader.train_loader,
+            "val_loader":   loader.val_loader,
+            "stress_loader":loader.stress_test_loader,
+            "note": "Classical model with same parameter budget as QCNN. Honest comparison."
+        },
+        {
+            "name": "HybridQNN",
+            "model": HybridQNN(NUM_CLASSES),
+            "train_loader": loader.train_loader,
+            "val_loader":   loader.val_loader,
+            "stress_loader":loader.stress_test_loader,
+            "note": "Quantum spatial encoder + classical head. Partial quantum advantage."
+        },
+        {
+            "name": "MultiClassQCNN (Pure Quantum)",
+            "model": MultiClassQCNN(NUM_CLASSES),
+            "train_loader": loader.train_loader_qcnn,
+            "val_loader":   loader.val_loader_qcnn,
+            "stress_loader":loader.stress_test_loader_qcnn,
+            "note": "Full amplitude embedding. Hypothesis: highest robustness retention ratio."
+        },
+    ]
 
-    eff_dim = evaluator.compute_effective_dimension(model, loader.train_loader, device)
-    clean_acc, clean_loss = evaluator.evaluate(model, loader.val_loader, device, apply_pgd=False)
-    print(f"Clean Val - Acc: {clean_acc:.4f}, Loss: {clean_loss:.4f}")
-    evaluator.log_result(name, num_classes, clean_acc, clean_loss, eff_dim, evaluator.count_parameters(model), condition="Clean")
+    print(f"\n{'─'*60}")
+    print(f"  Parameter Counts:")
+    for b in benchmarks:
+        n = count_params(b["model"])
+        print(f"  {b['name']:<42} {n:>8,} params")
+    print(f"{'─'*60}\n")
 
-    noisy_acc, noisy_loss = evaluator.evaluate(model, loader.stress_test_loader, device, apply_pgd=True)
-    print(f"PGD Stress Test - Acc: {noisy_acc:.4f}, Loss: {noisy_loss:.4f}")
-    evaluator.log_result(name, num_classes, noisy_acc, noisy_loss, eff_dim, evaluator.count_parameters(model), condition="PGD_Adversarial")
+    # ── Train and evaluate each model ─────────────────────────────────────────
+    for b in benchmarks:
+        name   = b["name"]
+        model  = b["model"]
+        n_params = count_params(model)
 
-    # ----------------------------------------------------------------
-    # Model B: HybridQNN -- uses raw [0,1] pixel loaders
-    # ----------------------------------------------------------------
-    name = "HybridQNN"
-    model = HybridQNN(num_classes=num_classes)
-    print(f"\nTraining {name}...")
-    print(f"Parameters: {evaluator.count_parameters(model)}")
-    train_model(model, loader.train_loader, epochs=30, lr=0.001, device=device)
+        print(f"\n{'='*60}")
+        print(f"  Training: {name}")
+        print(f"  Note: {b['note']}")
+        print(f"  Params: {n_params:,}")
+        print(f"{'='*60}")
 
-    eff_dim = evaluator.compute_effective_dimension(model, loader.train_loader, device)
-    clean_acc, clean_loss = evaluator.evaluate(model, loader.val_loader, device, apply_pgd=False)
-    print(f"Clean Val - Acc: {clean_acc:.4f}, Loss: {clean_loss:.4f}")
-    evaluator.log_result(name, num_classes, clean_acc, clean_loss, eff_dim, evaluator.count_parameters(model), condition="Clean")
+        train_model(model, b["train_loader"], device)
 
-    noisy_acc, noisy_loss = evaluator.evaluate(model, loader.stress_test_loader, device, apply_pgd=True)
-    print(f"PGD Stress Test - Acc: {noisy_acc:.4f}, Loss: {noisy_loss:.4f}")
-    evaluator.log_result(name, num_classes, noisy_acc, noisy_loss, eff_dim, evaluator.count_parameters(model), condition="PGD_Adversarial")
+        eff_dim = evaluator.compute_effective_dimension(model, b["train_loader"], device)
 
-    # ----------------------------------------------------------------
-    # Model C: MultiClassQCNN -- uses L2-unit-normalized loaders ONLY
-    # ----------------------------------------------------------------
-    name = "MultiClassQCNN"
-    model = MultiClassQCNN(num_classes=num_classes)
-    print(f"\nTraining {name}...")
-    print(f"Parameters: {evaluator.count_parameters(model)}")
-    train_model(model, loader.train_loader_qcnn, epochs=30, lr=0.005, device=device)
+        clean_acc, clean_loss = evaluator.evaluate(model, b["val_loader"], device, apply_pgd=False)
+        pgd_acc,   pgd_loss   = evaluator.evaluate(model, b["stress_loader"], device, apply_pgd=True)
 
-    eff_dim = evaluator.compute_effective_dimension(model, loader.train_loader_qcnn, device)
-    clean_acc, clean_loss = evaluator.evaluate(model, loader.val_loader_qcnn, device, apply_pgd=False)
-    print(f"Clean Val - Acc: {clean_acc:.4f}, Loss: {clean_loss:.4f}")
-    evaluator.log_result(name, num_classes, clean_acc, clean_loss, eff_dim, evaluator.count_parameters(model), condition="Clean")
+        retention = pgd_acc / clean_acc if clean_acc > 0 else 0.0
 
-    noisy_acc, noisy_loss = evaluator.evaluate(model, loader.stress_test_loader_qcnn, device, apply_pgd=True)
-    print(f"PGD Stress Test - Acc: {noisy_acc:.4f}, Loss: {noisy_loss:.4f}")
-    evaluator.log_result(name, num_classes, noisy_acc, noisy_loss, eff_dim, evaluator.count_parameters(model), condition="PGD_Adversarial")
+        print(f"\n  ── Results for {name} ──")
+        print(f"  Clean Val Acc :  {clean_acc:.4f}   Loss: {clean_loss:.4f}")
+        print(f"  PGD  Stress Acc: {pgd_acc:.4f}   Loss: {pgd_loss:.4f}")
+        print(f"  Robustness Retention Ratio: {retention:.4f}  ← KEY METRIC")
+        print(f"  Param Efficiency (clean): {clean_acc / (n_params/1000):.6f} acc per 1k params")
+
+        evaluator.log_result(name, NUM_CLASSES, clean_acc, clean_loss, eff_dim, n_params, condition="Clean")
+        evaluator.log_result(name, NUM_CLASSES, pgd_acc,   pgd_loss,   eff_dim, n_params, condition="PGD_Adversarial")
 
     evaluator.save_results()
-    print("\nBenchmarking complete. Results saved to results_comparison.csv")
+    print(f"\n{'='*60}")
+    print("  Benchmarking complete. Results saved to results_comparison.csv")
+    print(f"{'='*60}")
+
 
 if __name__ == "__main__":
     run_benchmarks()
