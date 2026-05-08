@@ -31,8 +31,8 @@ NC        = 115
 BS        = 128
 EPOCHS    = 15
 LR_CLASS  = 1e-3
-LR_QUANT  = 5e-3    # Slightly lower LR for stability
-Q_FEATURES = 16     # Expanded from 8 to 16 to reduce bottleneck
+LR_QUANT  = 5e-3
+Q_FEATURES = 10     # Sweet spot: 1024 states (Fast + Decent Capacity)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"🔥 RUTHLESS EXECUTION MODE INITIATED | Device: {device} 🔥\n")
@@ -41,7 +41,7 @@ print(f"🔥 RUTHLESS EXECUTION MODE INITIATED | Device: {device} 🔥\n")
 # DAY 1-2: DATA PIPELINE & TRANSFORMATIONS
 # ==========================================
 class AddGaussianNoise(object):
-    def __init__(self, mean=0., std=0.15): # Tuned noise to show separation
+    def __init__(self, mean=0., std=0.15):
         self.std = std
         self.mean = mean
     def __call__(self, tensor):
@@ -112,7 +112,7 @@ def count_parameters(model, trainable_only=True):
     return sum(p.numel() for p in model.parameters())
 
 # ==========================================
-# DAY 3-4: THE QCNN IN PENNYLANE (16 QUBITS)
+# DAY 3-4: THE QCNN IN PENNYLANE (10 QUBITS)
 # ==========================================
 dev = qml.device("default.qubit", wires=Q_FEATURES)
 
@@ -132,30 +132,28 @@ def pool_block(params, wires):
 def qcnn_circuit(inputs, conv_params, pool_params):
     qml.AngleEmbedding(inputs, wires=range(Q_FEATURES), rotation='Y')
     
-    # Layer 1: 16 -> 8
-    for i in range(0, 16, 2):
+    # Layer 1: 10 -> 5
+    for i in range(0, 10, 2):
         conv_block(conv_params[i//2], wires=[i, i+1])
-    for i in range(0, 16, 2):
+    for i in range(0, 10, 2):
         pool_block(pool_params[i//2], wires=[i, i+1])
         
-    # Layer 2: 8 -> 4
-    active_2 = [1, 3, 5, 7, 9, 11, 13, 15]
-    for i in range(0, 8, 2):
-        conv_block(conv_params[8 + i//2], wires=[active_2[i], active_2[i+1]])
-    for i in range(0, 8, 2):
-        pool_block(pool_params[8 + i//2], wires=[active_2[i], active_2[i+1]])
+    # Layer 2: 5 -> 3 (Active wires: 1, 3, 5, 7, 9)
+    active_2 = [1, 3, 5, 7, 9]
+    for i in range(0, 4, 2):
+        conv_block(conv_params[5 + i//2], wires=[active_2[i], active_2[i+1]])
+    for i in range(0, 4, 2):
+        pool_block(pool_params[5 + i//2], wires=[active_2[i], active_2[i+1]])
         
-    # Layer 3: 4 -> 2
-    active_3 = [3, 7, 11, 15]
-    for i in range(0, 4, 2):
-        conv_block(conv_params[12 + i//2], wires=[active_3[i], active_3[i+1]])
-    for i in range(0, 4, 2):
-        pool_block(pool_params[12 + i//2], wires=[active_3[i], active_3[i+1]])
+    # Layer 3: 3 -> 2 (Active wires: 3, 7, 9)
+    active_3 = [3, 7, 9]
+    conv_block(conv_params[7], wires=[active_3[0], active_3[1]])
+    pool_block(pool_params[7], wires=[active_3[0], active_3[1]])
 
-    # Layer 4: 2 -> 1
-    active_4 = [7, 15]
-    conv_block(conv_params[14], wires=[active_4[0], active_4[1]])
-    pool_block(pool_params[14], wires=[active_4[0], active_4[1]])
+    # Layer 4: 2 -> 1 (Active wires: 7, 9)
+    active_4 = [7, 9]
+    conv_block(conv_params[8], wires=[active_4[0], active_4[1]])
+    pool_block(pool_params[8], wires=[active_4[0], active_4[1]])
     
     return [qml.expval(qml.PauliZ(i)) for i in range(Q_FEATURES)]
 
@@ -171,7 +169,6 @@ class BlueprintHybridQCNN(nn.Module):
         else:
             resnet = models.resnet18(pretrained=True)
             
-        # Freeze most layers, but UNFREEZE layer4 for "Neck Tuning"
         for name, param in resnet.named_parameters():
             if "layer4" in name:
                 param.requires_grad = True
@@ -186,7 +183,7 @@ class BlueprintHybridQCNN(nn.Module):
             nn.Tanh()
         )
         
-        weight_shapes = {"conv_params": (15, 4), "pool_params": (15, 2)}
+        weight_shapes = {"conv_params": (9, 4), "pool_params": (9, 2)}
         self.qcnn = qml.qnn.TorchLayer(qcnn_circuit, weight_shapes)
         self.classifier = nn.Linear(Q_FEATURES, NC)
         
