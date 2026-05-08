@@ -3,100 +3,152 @@ import torch.nn as nn
 import torch.nn.functional as F
 import pennylane as qml
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Model A: Classical CNN (Baseline)
+#   Input: (B, 256) flattened 16×16 pixel values
+#   Full BatchNorm + residual-style architecture for 115 classes
+# ─────────────────────────────────────────────────────────────────────────────
 class ClassicalCNN(nn.Module):
     def __init__(self, num_classes=115):
-        super(ClassicalCNN, self).__init__()
-        self.conv1 = nn.Conv2d(1, 12, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(12, 12, kernel_size=3, padding=1)
-        self.conv3 = nn.Conv2d(12, 8, kernel_size=3, padding=1)
-        self.pool = nn.AvgPool2d(2)
-        self.dropout = nn.Dropout(0.2)
-        self.fc = nn.Linear(8, num_classes)
-        self.act = nn.GELU()
-        
+        super().__init__()
+        # Treat input as (B, 1, 16, 16)
+        self.features = nn.Sequential(
+            # Block 1: 16×16 → 8×8
+            nn.Conv2d(1, 32, kernel_size=3, padding=1),
+            nn.BatchNorm2d(32),
+            nn.GELU(),
+            nn.Conv2d(32, 32, kernel_size=3, padding=1),
+            nn.BatchNorm2d(32),
+            nn.GELU(),
+            nn.MaxPool2d(2),           # 8×8
+            nn.Dropout2d(0.1),
+
+            # Block 2: 8×8 → 4×4
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.GELU(),
+            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.GELU(),
+            nn.MaxPool2d(2),           # 4×4
+            nn.Dropout2d(0.1),
+
+            # Block 3: 4×4 → 2×2
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.GELU(),
+            nn.MaxPool2d(2),           # 2×2
+        )
+        self.head = nn.Sequential(
+            nn.Flatten(),              # 128×2×2 = 512
+            nn.Linear(512, 256),
+            nn.BatchNorm1d(256),
+            nn.GELU(),
+            nn.Dropout(0.4),
+            nn.Linear(256, num_classes)
+        )
+
     def forward(self, x):
         x = x.view(-1, 1, 16, 16)
-        x = self.pool(self.act(self.conv1(x)))
-        x = self.pool(self.act(self.conv2(x)))
-        x = self.pool(self.act(self.conv3(x)))
-        x = torch.mean(x, dim=(2, 3))
-        x = self.dropout(x)
-        x = self.fc(x)
-        return x
+        return self.head(self.features(x))
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Trainable Quanvolution (shared backbone for HybridQNN)
+#   Uses 4-qubit StronglyEntanglingLayers with backprop diff
+#   Input patches: (N, 4) where N = B × H_patches × W_patches
+# ─────────────────────────────────────────────────────────────────────────────
 class TrainableQuanvolution(nn.Module):
     def __init__(self):
-        super(TrainableQuanvolution, self).__init__()
-        self.dev = qml.device("default.qubit", wires=4)
-            
-        weight_shapes = {"weights": (1, 4, 3)}
-        
-        @qml.qnode(self.dev, interface="torch", diff_method="backprop")
+        super().__init__()
+        dev = qml.device("default.qubit", wires=4)
+        weight_shapes = {"weights": (2, 4, 3)}   # 2 entangling layers
+
+        @qml.qnode(dev, interface="torch", diff_method="backprop")
         def circuit(inputs, weights):
             qml.AngleEmbedding(inputs, wires=range(4))
             qml.StronglyEntanglingLayers(weights, wires=range(4))
             return [qml.expval(qml.PauliZ(i)) for i in range(4)]
-            
+
         self.qlayer = qml.qnn.TorchLayer(circuit, weight_shapes)
 
     def forward(self, x):
-        batch_size = x.shape[0]
-        x = x.view(batch_size, 1, 16, 16)
-        x_unfold = F.unfold(x, kernel_size=2, stride=2)
-        x_patches = x_unfold.transpose(1, 2).reshape(-1, 4)
-        
-        q_results = self.qlayer(x_patches)
-        
-        q_results = q_results.view(batch_size, 64, 4).transpose(1, 2)
-        out = q_results.reshape(batch_size, 4, 8, 8)
-        return out
+        B = x.shape[0]
+        x = x.view(B, 1, 16, 16)
+        patches = F.unfold(x, kernel_size=2, stride=2)      # (B, 4, 64)
+        patches = patches.transpose(1, 2).reshape(-1, 4)    # (B*64, 4)
+        out = self.qlayer(patches)                           # (B*64, 4)
+        out = out.view(B, 64, 4).transpose(1, 2)            # (B, 4, 64)
+        return out.reshape(B, 4, 8, 8)                      # (B, 4, 8, 8)
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Model B: Hybrid QNN
+#   Quantum convolutional feature extractor + classical deep head
+# ─────────────────────────────────────────────────────────────────────────────
 class HybridQNN(nn.Module):
     def __init__(self, num_classes=115):
-        super(HybridQNN, self).__init__()
+        super().__init__()
         self.qconv = TrainableQuanvolution()
-        self.fc = nn.Linear(4 * 8 * 8, num_classes)
-        
-    def forward(self, x):
-        x = self.qconv(x)
-        x = x.reshape(x.shape[0], -1)
-        x = self.fc(x)
-        return x
+        # Quantum output: (B, 4, 8, 8) → classical head
+        self.head = nn.Sequential(
+            nn.Conv2d(4, 16, kernel_size=3, padding=1),
+            nn.BatchNorm2d(16),
+            nn.GELU(),
+            nn.MaxPool2d(2),           # (B, 16, 4, 4)
+            nn.Flatten(),              # 256
+            nn.Linear(256, 128),
+            nn.BatchNorm1d(128),
+            nn.GELU(),
+            nn.Dropout(0.3),
+            nn.Linear(128, num_classes)
+        )
 
+    def forward(self, x):
+        return self.head(self.qconv(x))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Model C: Multi-Class QCNN
+#   Pure quantum: AmplitudeEmbedding into 8-qubit system
+#   25-layer deep entanglement + classical readout head
+# ─────────────────────────────────────────────────────────────────────────────
 class MultiClassQCNN(nn.Module):
     def __init__(self, num_classes=115, num_layers=25):
-        super(MultiClassQCNN, self).__init__()
+        super().__init__()
         self.num_classes = num_classes
         self.num_layers = num_layers
-        self.dev = qml.device("default.qubit", wires=8)
-        
+        dev = qml.device("default.qubit", wires=8)
+
         weight_shapes = {
             "f1_weights": (num_layers, 8, 2),
             "f2_weights": (num_layers, 8, 15),
             "pool_weights": (2,)
         }
-        
-        @qml.qnode(self.dev, interface="torch", diff_method="backprop")
+
+        @qml.qnode(dev, interface="torch", diff_method="backprop")
         def circuit(inputs, f1_weights, f2_weights, pool_weights):
             qml.AmplitudeEmbedding(features=inputs, wires=range(8), normalize=True)
-            
             for layer in range(self.num_layers):
                 for i in range(8):
                     qml.RY(f1_weights[layer, i, 0], wires=i)
                     qml.RX(f1_weights[layer, i, 1], wires=i)
-                
                 for i in range(8):
-                    w1 = i
-                    w2 = (i + 1) % 8
-                    qml.ArbitraryUnitary(f2_weights[layer, i], wires=[w1, w2])
-            
+                    qml.ArbitraryUnitary(f2_weights[layer, i], wires=[i, (i + 1) % 8])
             qml.CRZ(pool_weights[0], wires=[0, 1])
             qml.CRX(pool_weights[1], wires=[0, 1])
-            
-            return qml.probs(wires=range(1, 8))
-            
+            return qml.probs(wires=range(1, 8))   # 2^7 = 128 outputs
+
         self.qlayer = qml.qnn.TorchLayer(circuit, weight_shapes)
-        
+        # Classical readout head to map 128 → num_classes
+        self.readout = nn.Sequential(
+            nn.Linear(128, 256),
+            nn.GELU(),
+            nn.Dropout(0.3),
+            nn.Linear(256, num_classes)
+        )
+
     def forward(self, x):
-        probs = self.qlayer(x)
-        return probs[:, :self.num_classes]
+        probs = self.qlayer(x)    # (B, 128)
+        return self.readout(probs)
