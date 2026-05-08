@@ -160,8 +160,8 @@ def qcnn_circuit(inputs, conv_params, pool_params):
     conv_block(conv_params[6], wires=[active_3[0], active_3[1]])
     pool_block(pool_params[6], wires=[active_3[0], active_3[1]])
     
-    # 3. Measurement: Pauli-Z expectation value of the final remaining qubit (wire 7)
-    return qml.expval(qml.PauliZ(7))
+    # 3. Measurement: Pauli-Z expectation value of ALL 8 qubits to avoid 1D bottleneck
+    return [qml.expval(qml.PauliZ(i)) for i in range(Q_FEATURES)]
 
 # ==========================================
 # DAY 5: HYBRID TRAINING LOOP (C2Q Transfer)
@@ -189,17 +189,17 @@ class BlueprintHybridQCNN(nn.Module):
         weight_shapes = {"conv_params": (7, 4), "pool_params": (7, 2)}
         self.qcnn = qml.qnn.TorchLayer(qcnn_circuit, weight_shapes)
         
-        # Final output mapping from the 1 expectation value to NC classes
-        self.classifier = nn.Linear(1, NC)
+        # Final output mapping from the 8 expectation values to NC classes
+        self.classifier = nn.Linear(Q_FEATURES, NC)
         
     def forward(self, x):
         with torch.no_grad():
             f = self.feature_extractor(x)
         features_8d = self.compressor(f)
         q_out = self.qcnn(features_8d)
-        # Ensure correct shape for linear layer [batch_size, 1]
+        # Ensure correct shape for linear layer
         if len(q_out.shape) == 1:
-            q_out = q_out.unsqueeze(1)
+            q_out = q_out.unsqueeze(0)
         return self.classifier(q_out)
 
 # ==========================================
