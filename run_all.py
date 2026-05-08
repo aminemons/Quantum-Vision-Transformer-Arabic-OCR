@@ -167,11 +167,16 @@ def qcnn_circuit(inputs, conv_params, pool_params):
 # DAY 5: HYBRID TRAINING LOOP (C2Q Transfer)
 # ==========================================
 class BlueprintHybridQCNN(nn.Module):
-    def __init__(self):
+    def __init__(self, base_model=None):
         super().__init__()
-        # Load Pre-trained ResNet-18
-        resnet = models.resnet18(pretrained=True)
-        # FREEZE ResNet-18 weights
+        import copy
+        # Use the TRAINED Arabic ResNet if provided, otherwise fallback to ImageNet
+        if base_model is not None:
+            resnet = copy.deepcopy(base_model)
+        else:
+            resnet = models.resnet18(pretrained=True)
+            
+        # FREEZE ResNet-18 weights (we only want the feature extractor)
         for param in resnet.parameters():
             param.requires_grad = False
             
@@ -251,17 +256,19 @@ def run_killer_experiments():
     # ---------------------------------------------------------
     print("\n" + "="*50 + "\n SHOWCASE 1: THE PARAMETER CRUSH \n" + "="*50)
     classical_net = get_classical_resnet()
-    hybrid_qcnn = BlueprintHybridQCNN()
+    
+    print("\n🚀 Training Classical ResNet-18 (100% Data)...")
+    train_model(classical_net, loaders["train_100"], EPOCHS, LR_CLASS)
+    class_100_acc = evaluate_model(classical_net, loaders["test"])
+    
+    # NOW initialize Hybrid QCNN using the fully trained Arabic ResNet
+    hybrid_qcnn = BlueprintHybridQCNN(base_model=classical_net)
     
     c_params = count_parameters(classical_net, trainable_only=True)
     q_params = count_parameters(hybrid_qcnn, trainable_only=True)
     
     print(f"  Classical ResNet-18 Params: {c_params:,}")
     print(f"  Hybrid QCNN Trainable Params: {q_params:,} (Classical backbone frozen!)")
-    
-    print("\n🚀 Training Classical ResNet-18 (100% Data)...")
-    train_model(classical_net, loaders["train_100"], EPOCHS, LR_CLASS)
-    class_100_acc = evaluate_model(classical_net, loaders["test"])
     
     print("\n🚀 Training Hybrid QCNN (100% Data)...")
     train_model(hybrid_qcnn, loaders["train_100"], EPOCHS, LR_QUANT, is_quantum=True)
@@ -285,11 +292,13 @@ def run_killer_experiments():
     print("\n" + "="*50 + "\n SHOWCASE 3: FEW-SHOT DATA SCARCITY (10%) \n" + "="*50)
     # Re-initialize fresh models to prevent data leakage
     classical_net_10 = get_classical_resnet()
-    hybrid_qcnn_10 = BlueprintHybridQCNN()
     
     print("\n🚀 Training Classical ResNet-18 (10% Data)...")
     train_model(classical_net_10, loaders["train_10"], EPOCHS, LR_CLASS)
     class_10_acc = evaluate_model(classical_net_10, loaders["test"])
+
+    # NOW initialize Hybrid QCNN using the few-shot trained Arabic ResNet
+    hybrid_qcnn_10 = BlueprintHybridQCNN(base_model=classical_net_10)
     
     print("\n🚀 Training Hybrid QCNN (10% Data)...")
     train_model(hybrid_qcnn_10, loaders["train_10"], EPOCHS, LR_QUANT, is_quantum=True)
