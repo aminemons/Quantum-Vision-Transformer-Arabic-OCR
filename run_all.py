@@ -65,10 +65,19 @@ def get_dataloaders():
         AddGaussianNoise(0., 0.5) # Heavy Gaussian Noise
     ])
 
+    def is_valid(path):
+        try:
+            from PIL import Image
+            img = Image.open(path)
+            img.verify()
+            return True
+        except Exception:
+            return False
+
     # Load dataset
     root = DATA_DIR if os.path.isdir(DATA_DIR) else "./data"
-    full_ds = datasets.ImageFolder(root=root, transform=base_tf)
-    noise_ds = datasets.ImageFolder(root=root, transform=noise_tf)
+    full_ds = datasets.ImageFolder(root=root, transform=base_tf, is_valid_file=is_valid)
+    noise_ds = datasets.ImageFolder(root=root, transform=noise_tf, is_valid_file=is_valid)
     
     # Train/Test Split (80/20)
     train_size = int(0.8 * len(full_ds))
