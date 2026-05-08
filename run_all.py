@@ -110,11 +110,12 @@ class ClassicalCNN(nn.Module):
 # QUANTUM BUILDING BLOCKS  (refs [1],[3],[5])
 # ═══════════════════════════════════════════════════════════════
 def _qdev(w):
-    """Auto-select fastest PennyLane device."""
-    for nm in ["lightning.gpu","lightning.qubit","default.qubit"]:
+    """Auto-select fastest PennyLane device. For <= 10 qubits, CPU avoids massive GPU kernel launch overhead."""
+    devs = ["default.qubit", "lightning.qubit"] if w <= 10 else ["lightning.gpu", "lightning.qubit", "default.qubit"]
+    for nm in devs:
         try:
             d=qml.device(nm,wires=w)
-            df="adjoint" if "lightning" in nm else "backprop"
+            df="backprop" if nm == "default.qubit" else "adjoint"
             print(f"  [Q] device={nm} diff={df}"); return d,df
         except: continue
     raise RuntimeError("No PL device")
