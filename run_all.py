@@ -31,11 +31,11 @@ NC        = 115
 BS        = 128
 EPOCHS    = 15
 LR_CLASS  = 1e-3
-LR_QUANT  = 5e-3
+LR_QUANT  = 5e-4
 Q_FEATURES = 10     # Sweet spot: 1024 states (Fast + Decent Capacity)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"🔥 RUTHLESS EXECUTION MODE INITIATED | Device: {device} 🔥\n")
+print(f"RUTHLESS EXECUTION MODE INITIATED | Device: {device}\n")
 
 # ==========================================
 # DAY 1-2: DATA PIPELINE & TRANSFORMATIONS
@@ -189,7 +189,7 @@ class BlueprintHybridQCNN(nn.Module):
         
     def forward(self, x):
         f = self.feature_extractor(x)
-        features_qd = self.compressor(f)
+        features_qd = self.compressor(f) * np.pi
         q_out = self.qcnn(features_qd)
         if len(q_out.shape) == 1:
             q_out = q_out.unsqueeze(0)
@@ -245,7 +245,7 @@ def run_killer_experiments():
     print("\n" + "="*50 + "\n SHOWCASE 1: THE PARAMETER CRUSH \n" + "="*50)
     classical_net = get_classical_resnet()
     
-    print("\n🚀 Training Classical ResNet-18 (100% Data)...")
+    print("\nTraining Classical ResNet-18 (100% Data)...")
     train_model(classical_net, loaders["train_100"], EPOCHS, LR_CLASS)
     class_100_acc = evaluate_model(classical_net, loaders["test"])
     
@@ -258,7 +258,7 @@ def run_killer_experiments():
     print(f"  Classical ResNet-18 Params: {c_params:,}")
     print(f"  Hybrid QCNN Trainable Params: {q_params:,} (Classical backbone frozen!)")
     
-    print("\n🚀 Training Hybrid QCNN (100% Data)...")
+    print("\nTraining Hybrid QCNN (100% Data)...")
     train_model(hybrid_qcnn, loaders["train_100"], EPOCHS, LR_QUANT, is_quantum=True)
     qcnn_100_acc = evaluate_model(hybrid_qcnn, loaders["test"])
     
@@ -281,14 +281,14 @@ def run_killer_experiments():
     # Re-initialize fresh models to prevent data leakage
     classical_net_10 = get_classical_resnet()
     
-    print("\n🚀 Training Classical ResNet-18 (10% Data)...")
+    print("\nTraining Classical ResNet-18 (10% Data)...")
     train_model(classical_net_10, loaders["train_10"], EPOCHS, LR_CLASS)
     class_10_acc = evaluate_model(classical_net_10, loaders["test"])
 
     # NOW initialize Hybrid QCNN using the few-shot trained Arabic ResNet
     hybrid_qcnn_10 = BlueprintHybridQCNN(base_model=classical_net_10)
     
-    print("\n🚀 Training Hybrid QCNN (10% Data)...")
+    print("\nTraining Hybrid QCNN (10% Data)...")
     train_model(hybrid_qcnn_10, loaders["train_10"], EPOCHS, LR_QUANT, is_quantum=True)
     qcnn_10_acc = evaluate_model(hybrid_qcnn_10, loaders["test"])
     
@@ -298,10 +298,10 @@ def run_killer_experiments():
     # ---------------------------------------------------------
     # SAVE MODELS FOR ASSET GENERATION
     # ---------------------------------------------------------
-    print("\n💾 Saving models for paper asset generation...")
+    print("\nSaving models for paper asset generation...")
     torch.save(classical_net.state_dict(), "classical_resnet.pth")
     torch.save(hybrid_qcnn.state_dict(), "hybrid_qcnn.pth")
-    print("✅ Models saved: 'classical_resnet.pth' and 'hybrid_qcnn.pth'")
+    print("Models saved: 'classical_resnet.pth' and 'hybrid_qcnn.pth'")
 
     # ---------------------------------------------------------
     # GENERATE PUBLICATION PLOTS
@@ -356,8 +356,8 @@ def run_killer_experiments():
 
     plt.tight_layout()
     plt.savefig("killer_experiments_results.png", dpi=300)
-    print("✅ Visualizations saved to 'killer_experiments_results.png'")
-    print("🔥 BLUEPRINT EXECUTION COMPLETE 🔥")
+    print("Visualizations saved to 'killer_experiments_results.png'")
+    print("BLUEPRINT EXECUTION COMPLETE")
 
 if __name__ == "__main__":
     run_killer_experiments()
